@@ -1,14 +1,15 @@
 [project]
 name = "llm_utils"
-version = "2.1.0"
+version = "2.2.0"
 description = "One interface over LLM providers: OpenAI, Anthropic, Gemini, Bedrock, local HF models, and SLURM-cluster serving."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.60",
+    # openai floor: 2.47 is the verified version accepting httpx2 clients as http_client
+    "openai>=2.47",
     "anthropic>=0.40",
     "google-genai>=1.0",
-    "httpx>=0.27",
+    "httpx2>=2.9",
     "python-dotenv>=1.0",
     "pillow>=10.0",
 ]

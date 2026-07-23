@@ -17,7 +17,7 @@ extraction is the first standalone release).
 | Copy | Status at founding | Plan |
 |---|---|---|
 | `imaging_text_attacks…/src/llm_utils` | most-current trunk (owner-identified) | SEEDED here as v2.1.0 |
-| `llm_agent_security/src/llm_utils` | same ancestry, older (`base_llm_service.py` ~8.5K vs ~13K, `llm_model.py` differs) | diff against trunk; merge any real deltas; then migrate the repo to the pinned dep |
+| `llm_agent_security/src/llm_utils` | same ancestry, older (`base_llm_service.py` ~8.5K vs ~13K, `llm_model.py` differs) | RECONCILED at v2.2.0 (2026-07-23): full diff showed the trunk is a strict superset — zero deltas to merge (its vendored README was a stale usage doc, dropped). Its `_check_fatal_error` 404 path was a latent crash (imported `src.utils.exceptions`, which that repo never had). Remaining: migrate the repo to the pinned dep (TODO task on consumers) |
 | psyche `src/psyche/llm_utils` | DELIBERATE heavy fork: added `cost_ledger.py` + `model_policy.py`, slimmed `llm_model.py` ~35K→14K, dropped `cluster_server_manager` | do NOT flatten. Generic improvements (e.g. the slimmer model registry, usage-accounting primitives) merge UP as features/extras; psyche-specific meaning (cost-ledger destination, PRC-jurisdiction routing policy) stays in psyche as thin adapters over this package |
 
 Rule for all future divergence pressure: generic capability merges here; project-specific
@@ -47,7 +47,19 @@ extras, no vendoring, blind-mirror vendoring exception). Design rationale:
 
 ## Release discipline
 
-- Tag every release `vX.Y.Z`; keep `CHANGELOG.md` from the next release onward.
+- Tag every release `vX.Y.Z`; `CHANGELOG.md` records every release from v2.2.0 on.
 - `__version__` in `src/llm_utils/__init__.py` matches `pyproject.toml` version.
-- `httpx` note: the owner's standard for NEW builds is `httpx2`; this extraction keeps
-  `httpx` (existing code, opportunistic-migration rule) — tracked in TODO.
+- `httpx` note: migrated to `httpx2` at v2.2.0 (openai floor raised to >=2.47, the
+  verified version accepting httpx2 clients as `http_client`).
+
+## v2.2.0 decoupling decision (2026-07-23)
+
+The last host coupling (`LLMServiceFactory._load_model_defaults` lazily importing
+`src.experiment.config.load_conf`) was resolved with an **injectable config loader**
+(`set_config_loader(loader)`, mirroring the existing `set_server_manager` pattern)
+rather than moving the method host-side: the merge-defaults-with-kwargs behavior is
+generic factory mechanics worth keeping in the seam, while WHERE defaults live
+(YAML schema, file layout) is domain meaning that stays consumer-side. With no
+loader registered the factory builds services from caller kwargs alone. Hosts wire
+their YAML back in with one startup line — recorded in the migration plan (TODO
+consumers task).

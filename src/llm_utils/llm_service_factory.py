@@ -1,10 +1,13 @@
 """
 Factory for creating LLM service instances.
 
-This is the single bridge between YAML configuration and service constructors.
+This is the single bridge between configuration and service constructors.
 Services themselves are dumb executors — they take params from kwargs only.
+Where per-model defaults come from is the CONSUMER's choice: register a config
+loader via ``set_config_loader`` (e.g. one backed by the host repo's YAML
+config); without one, services are constructed from caller kwargs alone.
 """
-from typing import Dict, Optional, Type, Union
+from typing import Callable, Dict, Optional, Type, Union
 
 from .llm_model import LLMModel, Provider
 from .base_llm_service import BaseLLMService
@@ -19,10 +22,11 @@ from .llm_services import (
 
 class LLMServiceFactory:
     """Factory for creating LLM service instances based on model provider.
-    
-    Acts as the single bridge between YAML configuration and services.
-    Loads conf/llm/default.yaml + model-specific overrides, merges with
-    caller-provided kwargs, and passes the result to the service constructor.
+
+    Acts as the single bridge between configuration and services. If a config
+    loader is registered (``set_config_loader``), its per-model defaults are
+    merged with caller-provided kwargs (kwargs win) and passed to the service
+    constructor; with no loader, kwargs alone configure the service.
     """
     
     # Registry mapping providers to their service implementations
@@ -41,8 +45,35 @@ class LLMServiceFactory:
     
     # Cluster server manager (set by Experiment before running tasks)
     _server_manager: Optional[object] = None
-    
-    
+
+    # Per-model default-params loader (set by the consumer at startup).
+    # Signature: loader(model: LLMModel) -> dict of service-constructor kwargs.
+    _config_loader: Optional[Callable[[LLMModel], dict]] = None
+
+
+    @classmethod
+    def set_config_loader(cls, loader: Callable[[LLMModel], dict]) -> None:
+        """
+        Register a loader that supplies per-model default constructor params.
+
+        The package itself has no config-file knowledge; a consumer that keeps
+        model params in config (e.g. YAML) wires it in here once at startup:
+
+            LLMServiceFactory.set_config_loader(
+                lambda model: my_load_conf(model.model_id))
+
+        Args:
+            loader: Callable taking the LLMModel, returning a dict of kwargs
+                for the service constructor (may be empty).
+        """
+        cls._config_loader = loader
+
+    @classmethod
+    def clear_config_loader(cls) -> None:
+        """Unregister the config loader (services then use caller kwargs only)."""
+        cls._config_loader = None
+
+
     @classmethod
     def set_server_manager(cls, manager) -> None:
         """
@@ -106,11 +137,10 @@ class LLMServiceFactory:
 
     @classmethod
     def _load_model_defaults(cls, model: LLMModel) -> dict:
-        """Load model params from YAML: default.yaml → model-specific override."""
-        from src.experiment.config import load_conf
-        params = load_conf(
-            "llm", section="model",
-            match_field="model.model", match_value=model.model_id)
+        """Load per-model default params from the registered config loader."""
+        if cls._config_loader is None:
+            return {}
+        params = dict(cls._config_loader(model))
         # 'model' is already passed as a positional arg to service constructors,
         # so remove it from kwargs to avoid "got multiple values for argument"
         params.pop("model", None)

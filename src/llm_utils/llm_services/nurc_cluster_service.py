@@ -9,7 +9,7 @@ import asyncio
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
+import httpx2
 from openai import AsyncOpenAI
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
@@ -48,9 +48,9 @@ class NURCClusterService(BaseLLMService):
         return AsyncOpenAI(
             base_url=server_url,
             api_key="unused",
-            http_client=httpx.AsyncClient(
+            http_client=httpx2.AsyncClient(
                 trust_env=False,
-                timeout=httpx.Timeout(600.0, connect=60.0),
+                timeout=httpx2.Timeout(600.0, connect=60.0),
             ),
         )
 
