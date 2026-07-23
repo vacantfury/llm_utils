@@ -111,10 +111,10 @@ def is_credit_exhausted_error(exc: BaseException) -> bool:
 # network/connection error, timeout, rate-limit exhaustion, a failed/missing
 # batch item). This is *not* a refusal — a refusal is a successful call that
 # returns refusal text (or empty content). Services emit it only from their
-# failure paths (the `except` handler, or an errored batch item). Downstream,
-# rows whose response carries this sentinel are flagged
-# `is_correctly_processed=False` and EXCLUDED from metric denominators, so an
-# untestable prompt is never miscounted as a defeated attack.
+# failure paths (the `except` handler, or an errored batch item). Callers
+# should check `is_mechanism_error(resp)` to distinguish a real failure (retry
+# / escalate / exclude from result denominators) from a valid model response
+# (which may itself be a refusal).
 #
 # The null byte makes the marker impossible to confuse with real model output.
 MECHANISM_ERROR_SENTINEL = "\x00__MECHANISM_ERROR__\x00"
@@ -170,6 +170,29 @@ class BaseLLMService(ABC):
     - total_usage: all calls (algorithm + test evaluation)
     """
 
+    # Consumer-installable usage hook — the seam for durable accounting (e.g. a
+    # cost ledger). `_record_usage` is the ONE choke point every provider
+    # funnels through, so a registered hook sees every call; the in-memory
+    # UsageStats above die with the process, the hook is how a consumer
+    # persists spend. Signature:
+    #   hook(model, input_tokens, output_tokens, cost_usd, is_test=..., label=...)
+    _usage_hook: Optional[Callable[..., None]] = None
+    _usage_hook_warned: bool = False
+
+    @classmethod
+    def set_usage_hook(cls, hook: Callable[..., None]) -> None:
+        """Register a callable invoked after every recorded call (all services).
+
+        The hook must be cheap; exceptions it raises are swallowed (one stderr
+        warning per process) — accounting must never kill a call.
+        """
+        cls._usage_hook = hook
+
+    @classmethod
+    def clear_usage_hook(cls) -> None:
+        """Unregister the usage hook."""
+        cls._usage_hook = None
+
     def __init__(
         self,
         max_concurrency: int = 20,
@@ -183,6 +206,9 @@ class BaseLLMService(ABC):
         self.batch_timeout = batch_timeout
         self.algorithm_usage = UsageStats()
         self.total_usage = UsageStats()
+        # Free-form accounting tag for the usage hook (set via
+        # LLMServiceFactory.create(..., label=...)). None = unlabeled.
+        self.usage_label: Optional[str] = None
 
     def _record_usage(
         self, input_tokens: int, output_tokens: int, cost: float, is_test: bool,
@@ -190,6 +216,32 @@ class BaseLLMService(ABC):
         self.total_usage.record(input_tokens, output_tokens, cost)
         if not is_test:
             self.algorithm_usage.record(input_tokens, output_tokens, cost)
+        if BaseLLMService._usage_hook is not None:
+            try:
+                BaseLLMService._usage_hook(
+                    getattr(self, "model", None),
+                    input_tokens, output_tokens, cost,
+                    is_test=is_test, label=self.usage_label,
+                )
+            except Exception as e:  # noqa: BLE001 — accounting never kills a call
+                if not BaseLLMService._usage_hook_warned:
+                    BaseLLMService._usage_hook_warned = True
+                    logger.warning(
+                        f"usage hook failed ({str(e)[:90]}) — "
+                        f"calls proceed unrecorded this process")
+
+    def _accepts_temperature(self) -> bool:
+        """Single source of truth for the temperature quirk across ALL providers.
+
+        Newer reasoning models — OpenAI GPT-5 / o-series, Anthropic Opus 4.7+,
+        Moonshot Kimi K3 — reject a custom ``temperature`` with a 400 and must
+        be sent none. A model declares this once in the registry via
+        ``ModelQuirk.NO_CUSTOM_TEMPERATURE``; every service gates its
+        temperature through here, so adding a new such model is a one-line
+        registry change.
+        """
+        from .llm_model import ModelQuirk
+        return not self.model.has_quirk(ModelQuirk.NO_CUSTOM_TEMPERATURE)
 
     def _check_fatal_error(self, error: Exception, model_id: str) -> None:
         """Raise ``FatalModelError`` for 404 / model-not-found errors."""
@@ -316,3 +368,39 @@ class BaseLLMService(ABC):
             List of ``(id, response_text)`` tuples in the same order as input.
         """
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Single-prompt convenience. `achat` offloads the sync call to a
+    # worker thread so it composes with an async runtime without the
+    # nested-event-loop error `batch_chat`'s internal `asyncio.run` raises.
+    # ------------------------------------------------------------------
+
+    def chat(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        *,
+        is_test: bool = False,
+        **kwargs,
+    ) -> str:
+        """One prompt → one response string."""
+        out = self.batch_chat(
+            [("_one", [(prompt, None)])],
+            system_message=system_message,
+            is_test=is_test,
+            **kwargs,
+        )
+        return out[0][1]
+
+    async def achat(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        *,
+        is_test: bool = False,
+        **kwargs,
+    ) -> str:
+        """Async one-prompt call — runs the sync call in a worker thread."""
+        return await asyncio.to_thread(
+            self.chat, prompt, system_message, is_test=is_test, **kwargs
+        )

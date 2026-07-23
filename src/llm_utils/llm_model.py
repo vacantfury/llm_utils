@@ -33,16 +33,20 @@ class Provider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
-    # ── OpenAI-compatible third-party endpoints (added 2026-07-12; mirror of
-    # psyche llm_utils). DeepSeek + Z.AI + Moonshot are DIRECT MAINLAND
-    # endpoints — NEVER send personal data through them; for ZERO-personal-data
-    # bulk work only (LLM-judge calls / evals over public-benchmark responses),
-    # the sanctioned use under the global data-jurisdiction rule. This is a
-    # public research repo running exactly that zero-personal-data work, so the
-    # mainland APIs are fine here (no `_MAINLAND`-style block). xAI (Grok) is US
-    # jurisdiction.
+    # ── OpenAI-compatible third-party endpoints. DeepSeek + Z.AI + Moonshot
+    # are DIRECT MAINLAND endpoints — data is processed under PRC jurisdiction
+    # per the providers' own policies. Consumers must route ONLY
+    # zero-personal-data bulk work through them (LLM-judge calls / evals over
+    # public-benchmark responses); anything personal stays on US-jurisdiction
+    # providers or a non-retaining US host of the same weights (see OPENROUTER).
+    # xAI (Grok) is US jurisdiction. This package is transport only — each
+    # consumer enforces its own routing policy on top.
     DEEPSEEK = "deepseek"
     ZAI = "zai"
+    # US aggregator serving open weights via configurable host routing. With a
+    # zero-data-retention routing policy enabled on the account, it is the
+    # US-jurisdiction route to Chinese open-weight models.
+    OPENROUTER = "openrouter"
     XAI = "xai"
     MOONSHOT = "moonshot"
     # AWS Bedrock (bedrock-runtime.converse) — US-hosted managed API (us-east-1)
@@ -67,6 +71,11 @@ class ModelQuirk(str, Enum):
     USES_MAX_COMPLETION_TOKENS = "uses_max_completion_tokens"
     # OpenAI reasoning models reject any temperature != 1.0
     NO_CUSTOM_TEMPERATURE = "no_custom_temperature"
+    # Gemini thinking models count THOUGHT tokens against max_output_tokens,
+    # so a caller's small cap starves the visible text (a max_tokens=1200 call
+    # can truncate mid-sentence with the budget spent on thought). The Google
+    # service grants thinking headroom on top of the caller's budget.
+    THINKING_SHARES_OUTPUT_BUDGET = "thinking_shares_output_budget"
 
 
 @dataclass(frozen=True)
@@ -107,6 +116,12 @@ _GPT5_QUIRKS = frozenset({
 _GPT41_QUIRKS = frozenset({
     ModelQuirk.USES_MAX_COMPLETION_TOKENS,
 })
+# Newer Claude models reject `temperature` (400). They use `max_tokens` (not
+# `max_completion_tokens`), so only the no-temperature quirk applies.
+_NO_TEMP = frozenset({ModelQuirk.NO_CUSTOM_TEMPERATURE})
+# Gemini rows that think by default (2.5 flash/pro, 3.x flash/pro): thought
+# tokens bill and cap as output tokens.
+_GEMINI_THINKING = frozenset({ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET})
 
 
 class LLMModel(Enum):
@@ -158,21 +173,22 @@ class LLMModel(Enum):
     CLAUDE_OPUS_4_1 = ModelSpec("claude-opus-4-1-20250805", Provider.ANTHROPIC, 15.00, 75.00)
     CLAUDE_OPUS_4_5 = ModelSpec("claude-opus-4-5-20251101", Provider.ANTHROPIC, 5.00,  25.00)
     CLAUDE_OPUS_4_6 = ModelSpec("claude-opus-4-6",          Provider.ANTHROPIC, 5.00,  25.00)
-    CLAUDE_OPUS_4_7 = ModelSpec("claude-opus-4-7",          Provider.ANTHROPIC, 5.00,  25.00)
+    CLAUDE_OPUS_4_7 = ModelSpec("claude-opus-4-7",          Provider.ANTHROPIC, 5.00,  25.00, quirks=_NO_TEMP)
+    CLAUDE_OPUS_4_8 = ModelSpec("claude-opus-4-8",          Provider.ANTHROPIC, 5.00,  25.00, quirks=_NO_TEMP)
     # Haiku
     CLAUDE_HAIKU_4_5 = ModelSpec("claude-haiku-4-5-20251001", Provider.ANTHROPIC, 1.00, 5.00)
 
     # ──────── Google ────────
     GEMINI_2_0_FLASH               = ModelSpec("gemini-2.0-flash",                Provider.GOOGLE, 0.10,  0.40)
     GEMINI_2_0_FLASH_LITE          = ModelSpec("gemini-2.0-flash-lite",           Provider.GOOGLE, 0.075, 0.30)
-    GEMINI_2_5_FLASH               = ModelSpec("gemini-2.5-flash",                Provider.GOOGLE, 0.30,  2.50)
+    GEMINI_2_5_FLASH               = ModelSpec("gemini-2.5-flash",                Provider.GOOGLE, 0.30,  2.50, quirks=_GEMINI_THINKING)
     GEMINI_2_5_FLASH_LITE          = ModelSpec("gemini-2.5-flash-lite",           Provider.GOOGLE, 0.075, 0.30)
-    GEMINI_2_5_PRO                 = ModelSpec("gemini-2.5-pro",                  Provider.GOOGLE, 1.25,  10.00)
-    GEMINI_3_FLASH_PREVIEW         = ModelSpec("gemini-3-flash-preview",          Provider.GOOGLE, 0.50,  3.00)
+    GEMINI_2_5_PRO                 = ModelSpec("gemini-2.5-pro",                  Provider.GOOGLE, 1.25,  10.00, quirks=_GEMINI_THINKING)
+    GEMINI_3_FLASH_PREVIEW         = ModelSpec("gemini-3-flash-preview",          Provider.GOOGLE, 0.50,  3.00, quirks=_GEMINI_THINKING)
     # gemini-3-pro-preview + gemini-3.1-flash-lite-preview REMOVED 2026-07-12 (dead — 404 since Mar/May 2026, verified); use the GA IDs below.
-    GEMINI_3_1_PRO_PREVIEW         = ModelSpec("gemini-3.1-pro-preview",          Provider.GOOGLE, 2.00,  12.00)
+    GEMINI_3_1_PRO_PREVIEW         = ModelSpec("gemini-3.1-pro-preview",          Provider.GOOGLE, 2.00,  12.00, quirks=_GEMINI_THINKING)
     GEMINI_3_1_FLASH_LITE          = ModelSpec("gemini-3.1-flash-lite",           Provider.GOOGLE, 0.25,  1.50)   # GA (replaced dead preview)
-    GEMINI_3_5_FLASH               = ModelSpec("gemini-3.5-flash",                Provider.GOOGLE, 1.50,  9.00)   # GA ~May 2026 — JUDGE pick
+    GEMINI_3_5_FLASH               = ModelSpec("gemini-3.5-flash",                Provider.GOOGLE, 1.50,  9.00, quirks=_GEMINI_THINKING)   # GA ~May 2026 — JUDGE pick
 
     # ──────── DeepSeek (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
     DEEPSEEK_V4_FLASH = ModelSpec("deepseek-v4-flash", Provider.DEEPSEEK, 0.14,  0.28, family="deepseek")
@@ -181,14 +197,23 @@ class LLMModel(Enum):
     # ──────── Z.AI / GLM (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
     GLM_5_2        = ModelSpec("glm-5.2",        Provider.ZAI, 1.40, 4.40, family="glm")   # current flagship (added 2026-07-12)
     GLM_5          = ModelSpec("glm-5",          Provider.ZAI, 1.00, 3.20, family="glm")
+    GLM_5_TURBO    = ModelSpec("glm-5-turbo",    Provider.ZAI, 1.20, 4.00, family="glm")
+    GLM_5V_TURBO   = ModelSpec("glm-5v-turbo",   Provider.ZAI, 1.20, 4.00, family="glm")   # vision
     GLM_4_7        = ModelSpec("glm-4.7",        Provider.ZAI, 0.60, 2.20, family="glm")
     GLM_4_7_FLASHX = ModelSpec("glm-4.7-flashx", Provider.ZAI, 0.07, 0.40, family="glm")   # JUDGE pick — full 4.7 reasoning, ~20x cheaper
     GLM_4_7_FLASH  = ModelSpec("glm-4.7-flash",  Provider.ZAI, 0.00, 0.00, family="glm")   # free tier
     GLM_4_6V       = ModelSpec("glm-4.6v",       Provider.ZAI, 0.30, 0.90, family="glm")   # vision variant
 
     # ──────── xAI / Grok (US jurisdiction, OpenAI-compatible) ────────
-    GROK_4_5      = ModelSpec("grok-4.5",      Provider.XAI, 2.00, 6.00, family="grok")
-    GROK_4_3      = ModelSpec("grok-4.3",      Provider.XAI, 1.25, 2.50, family="grok")
+    # Registry per docs.x.ai 2026-07-08. Retired names (grok-4, grok-4-fast,
+    # grok-4-1-fast, grok-3, grok-3-mini) are server-side ALIASES routing to
+    # grok-4.3 — register only the real current ids.
+    GROK_4_5      = ModelSpec("grok-4.5",      Provider.XAI, 2.00, 6.00, family="grok")   # newest; xAI-recommended for code+general (500k ctx)
+    GROK_4_3      = ModelSpec("grok-4.3",      Provider.XAI, 1.25, 2.50, family="grok")   # flagship value tier (1M ctx)
+    GROK_4_20_REASONING     = ModelSpec("grok-4.20-0309-reasoning",     Provider.XAI, 1.25, 2.50, family="grok")
+    GROK_4_20_NON_REASONING = ModelSpec("grok-4.20-0309-non-reasoning", Provider.XAI, 1.25, 2.50, family="grok")
+    GROK_4_20_MULTI_AGENT   = ModelSpec("grok-4.20-multi-agent-0309",   Provider.XAI, 1.25, 2.50, family="grok")
+    GROK_BUILD_0_1          = ModelSpec("grok-build-0.1",               Provider.XAI, 1.00, 2.00, family="grok")   # code-specialist (256k ctx)
 
     # ──────── Moonshot / Kimi (direct mainland, OpenAI-compatible) — judge/eval
     # /attack-target only, no personal data (added 2026-07-16). input_price is the
@@ -215,6 +240,20 @@ class LLMModel(Enum):
     KIMI_K2_6 = ModelSpec(
         "kimi-k2.6", Provider.MOONSHOT, 0.95, 4.00,
         max_context_len=262_144, family="kimi")
+
+    # ──────── OpenRouter (US aggregator over hosted open weights) ────────
+    # US-jurisdiction route to open-weight models, incl. Chinese-origin
+    # families — with a zero-data-retention routing policy enabled on the
+    # account, requests reach only non-retaining hosts. Prices = cheapest-host
+    # list at registration; ZDR routing may pick a pricier host. One row per
+    # family flagship; add more ids as needed.
+    OR_DEEPSEEK_V4_FLASH = ModelSpec("deepseek/deepseek-v4-flash", Provider.OPENROUTER, 0.09,  0.18, family="deepseek")
+    OR_DEEPSEEK_V4_PRO   = ModelSpec("deepseek/deepseek-v4-pro",   Provider.OPENROUTER, 0.435, 0.87, family="deepseek")
+    OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 0.93,  3.00, family="glm")
+    OR_QWEN_3_7_MAX      = ModelSpec("qwen/qwen3.7-max",           Provider.OPENROUTER, 1.25,  3.75, family="qwen")
+    OR_KIMI_K2_6         = ModelSpec("moonshotai/kimi-k2.6",       Provider.OPENROUTER, 0.55,  3.20, family="kimi")
+    OR_KIMI_K3           = ModelSpec("moonshotai/kimi-k3",         Provider.OPENROUTER, 3.00, 15.00, family="kimi", quirks=_NO_TEMP)
+    OR_MINIMAX_M3        = ModelSpec("minimax/minimax-m3",         Provider.OPENROUTER, 0.30,  1.20, family="minimax")
 
     # ──────── AWS Bedrock (US-hosted us-east-1, via the xc cluster's AWS
     # profile, set with AWS_PROFILE — TODO item 2). model_id MUST be the exact

@@ -2,7 +2,6 @@
 Constants for LLM configurations and endpoints.
 """
 import os
-from pathlib import Path
 from typing import Final, Optional, TYPE_CHECKING
 
 from dotenv import load_dotenv
@@ -11,12 +10,12 @@ from dotenv import load_dotenv
 if TYPE_CHECKING:
     from .llm_model import LLMModel
 
-# API keys are read as plain environment variables (see .env.example for the list).
-# They can be exported in the shell, injected by a secret manager, or placed in a
-# gitignored repo-root `.env`. We load that `.env` here if present, with
-# override=False so anything already set in the real environment always wins.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(_REPO_ROOT / ".env", override=False)
+# API keys are read as plain environment variables. They can be exported in the
+# shell, injected by a secret manager, or placed in a gitignored `.env` in the
+# CONSUMER's working tree — load_dotenv() searches upward from the CWD, which is
+# what an installed package must do (a path relative to this file would point
+# into site-packages). override=False: the real environment always wins.
+load_dotenv(override=False)
 
 
 # API Keys (loaded from environment variables)
@@ -24,14 +23,14 @@ OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
 GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
 HUGGINGFACE_TOKEN: Optional[str] = os.getenv("HUGGINGFACE_TOKEN")
-# OpenAI-compatible third-party providers (added 2026-07-12, for judge/eval use).
-# DeepSeek + Z.AI + Moonshot are DIRECT MAINLAND endpoints — route ZERO personal
-# data through them (judge/eval/attack-target calls over public-benchmark data
-# only), per the global data-jurisdiction rule. This public research repo runs
-# exactly that zero-personal-data work, so the mainland APIs are sanctioned here.
-# xAI (Grok) is US jurisdiction.
+# OpenAI-compatible third-party providers. DeepSeek + Z.AI + Moonshot are
+# DIRECT MAINLAND endpoints — consumers must route ZERO personal data through
+# them (bulk judge/eval work over public data only); see the Provider registry
+# note in llm_model.py. xAI is US jurisdiction; OpenRouter is a US aggregator
+# over hosted open weights.
 DEEPSEEK_API_KEY: Optional[str] = os.getenv("DEEPSEEK_API_KEY")
 ZAI_API_KEY: Optional[str] = os.getenv("ZAI_API_KEY")
+OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY")
 XAI_API_KEY: Optional[str] = os.getenv("XAI_API_KEY")
 MOONSHOT_API_KEY: Optional[str] = os.getenv("MOONSHOT_API_KEY")
 
@@ -39,6 +38,7 @@ MOONSHOT_API_KEY: Optional[str] = os.getenv("MOONSHOT_API_KEY")
 OPENAI_API_URL: Final[str] = "https://api.openai.com/v1"
 DEEPSEEK_API_URL: Final[str] = "https://api.deepseek.com"          # direct mainland
 ZAI_API_URL: Final[str] = "https://api.z.ai/api/paas/v4"           # direct mainland
+OPENROUTER_API_URL: Final[str] = "https://openrouter.ai/api/v1"    # US aggregator
 XAI_API_URL: Final[str] = "https://api.x.ai/v1"                    # US jurisdiction
 MOONSHOT_API_URL: Final[str] = "https://api.moonshot.ai/v1"        # direct mainland (.ai = international)
 OLLAMA_BASE_URL: Final[str] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

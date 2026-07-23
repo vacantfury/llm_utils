@@ -3,6 +3,7 @@ OpenAI service — uses ``AsyncOpenAI`` + ``asyncio.gather`` for concurrent
 request processing.
 """
 import asyncio
+import os
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -10,7 +11,7 @@ from openai import AsyncOpenAI
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
 from ..llm_model import LLMModel, ModelQuirk
-from ..constants import OPENAI_API_KEY
+from .. import constants as _constants  # noqa: F401  (side effect: load_dotenv)
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger
 
@@ -26,9 +27,9 @@ class OpenAIService(BaseLLMService):
     """
 
     # Provider overrides — subclasses change these for OpenAI-compatible endpoints.
-    API_KEY: Optional[str] = OPENAI_API_KEY
+    API_KEY_ENV: str = "OPENAI_API_KEY"       # env var holding the key
     BASE_URL: Optional[str] = None            # None → default OpenAI endpoint
-    SERVICE_NAME: str = "OpenAI"
+    SERVICE_NAME: str = "OpenAI"              # for logs / error messages
 
     def __init__(self, model: LLMModel, config=None, **kwargs):
         super().__init__(
@@ -38,11 +39,11 @@ class OpenAIService(BaseLLMService):
             batch_timeout=kwargs.pop("batch_timeout", 3600),
         )
         self.model = model
-        self.api_key = kwargs.get("api_key") or self.API_KEY
+        self.api_key = kwargs.get("api_key") or os.getenv(self.API_KEY_ENV)
         if not self.api_key:
             raise ValueError(
-                f"{self.SERVICE_NAME} API key not found. Set the appropriate "
-                f"*_API_KEY in .env or pass the api_key parameter"
+                f"{self.SERVICE_NAME} API key not found. Set {self.API_KEY_ENV} "
+                f"in the environment (or a repo .env) or pass the api_key parameter"
             )
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
@@ -62,7 +63,7 @@ class OpenAIService(BaseLLMService):
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {"model": self.model.model_id, "messages": messages}
 
-        if not self.model.has_quirk(ModelQuirk.NO_CUSTOM_TEMPERATURE):
+        if self._accepts_temperature():
             params["temperature"] = temperature
 
         if self.model.has_quirk(ModelQuirk.USES_MAX_COMPLETION_TOKENS):
@@ -153,7 +154,7 @@ class OpenAIService(BaseLLMService):
                         await asyncio.sleep(wait)
                         continue
                     self._check_fatal_error(e, self.model.model_id)
-                    logger.error(f"OpenAI API error: {err}")
+                    logger.error(f"{self.SERVICE_NAME} API error: {err}")
                     return make_mechanism_error(err)
         return make_mechanism_error("retries exhausted (unreachable)")
 

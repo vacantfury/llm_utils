@@ -15,8 +15,8 @@ from .base_llm_service import BaseLLMService
 # Import concrete service implementations
 from .llm_services import (
     OpenAIService, DeepSeekService, ZAIService, XAIService, MoonshotService,
-    ClaudeService, GoogleService, LocalLMService, NURCClusterService,
-    BedrockService,
+    OpenRouterService, ClaudeService, GoogleService, LocalLMService,
+    NURCClusterService, BedrockService,
 )
 
 
@@ -36,6 +36,7 @@ class LLMServiceFactory:
         Provider.ZAI: ZAIService,
         Provider.XAI: XAIService,
         Provider.MOONSHOT: MoonshotService,
+        Provider.OPENROUTER: OpenRouterService,
         Provider.BEDROCK: BedrockService,
         Provider.ANTHROPIC: ClaudeService,
         Provider.GOOGLE: GoogleService,
@@ -147,26 +148,30 @@ class LLMServiceFactory:
         return params
 
     @classmethod
-    def create(cls, model: Union[str, LLMModel], **kwargs) -> BaseLLMService:
+    def create(cls, model: Union[str, LLMModel], *, label: Optional[str] = None,
+               **kwargs) -> BaseLLMService:
         """
         Create an LLM service instance for the given model.
-        
-        Loads YAML defaults for the model and merges with caller kwargs
-        (caller kwargs take priority). For cluster models, automatically
+
+        Merges the registered config loader's per-model defaults with caller
+        kwargs (caller kwargs take priority). For cluster models, automatically
         injects the server manager.
-        
+
         Args:
             model: The LLM model (LLMModel enum or string model ID)
+            label: Accounting tag for this instance's calls, passed to the
+                usage hook (see ``BaseLLMService.set_usage_hook``) — for the
+                consumer's bookkeeping only, never behavior.
             **kwargs: Additional arguments passed to the service constructor.
-                These override YAML defaults.
+                These override loader defaults.
                 Common kwargs:
                 - temperature (float): Sampling temperature
                 - max_tokens (int): Maximum tokens to generate
                 - api_key (str): API key for API-based services
-        
+
         Returns:
             Instance of the appropriate service implementation
-        
+
         Raises:
             ValueError: If no service is registered for the model's provider
         """
@@ -195,5 +200,8 @@ class LLMServiceFactory:
                     f"Call LLMServiceFactory.set_server_manager() first."
                 )
             merged_kwargs["server_manager"] = cls._server_manager
-        
-        return service_class(model, **merged_kwargs)
+
+        service = service_class(model, **merged_kwargs)
+        if label:
+            service.usage_label = label
+        return service

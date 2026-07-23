@@ -8,15 +8,23 @@ Flow: build inline requests → ``client.batches.create`` → poll until
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import PIL.Image
+try:  # Pillow is only needed for image messages; text-only use works without it
+    import PIL.Image
+except ImportError:  # pragma: no cover
+    PIL = None
 import google.genai as genai
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
-from ..llm_model import LLMModel
+from ..llm_model import LLMModel, ModelQuirk
 from ..constants import GOOGLE_API_KEY
 from .._logging import get_logger
 
 logger = get_logger(__name__)
+
+# Thinking models (THINKING_SHARES_OUTPUT_BUDGET quirk) spend max_output_tokens
+# on thought before a word of visible text appears — the caller's max_tokens
+# means VISIBLE text, so grant this much extra for the thinking share.
+_THINKING_HEADROOM = 8192
 
 _TERMINAL_STATES = frozenset({
     "JOB_STATE_SUCCEEDED",
@@ -50,6 +58,13 @@ class GoogleService(BaseLLMService):
         self.client = genai.Client(api_key=self.api_key)
         logger.info(f"Initialized Google service with {model.model_id}")
 
+    def _output_budget(self, max_tokens: int) -> int:
+        """The effective max_output_tokens: thinking models get headroom so
+        thought tokens can't starve the caller's visible-text budget."""
+        if self.model.has_quirk(ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET):
+            return max_tokens + _THINKING_HEADROOM
+        return max_tokens
+
     # ------------------------------------------------------------------
     # Message formatting
     # ------------------------------------------------------------------
@@ -66,6 +81,8 @@ class GoogleService(BaseLLMService):
                 parts.append(text)
             else:
                 images = image if isinstance(image, list) else [image]
+                if PIL is None:
+                    raise RuntimeError("image messages need Pillow: uv add pillow")
                 for img in images:
                     if img is None:
                         continue
@@ -91,17 +108,19 @@ class GoogleService(BaseLLMService):
         for _item_id, parts in prepared:
             contents = []
             for p in parts:
-                if isinstance(p, (str, PIL.Image.Image)):
+                if isinstance(p, str) or (PIL is not None and isinstance(p, PIL.Image.Image)):
                     contents.append(p)
                 else:
                     contents.append(str(p))
 
-            config: Dict[str, Any] = {
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            }
-            if temperature > 0:
-                config["top_p"] = self.top_p
+            config: Dict[str, Any] = {"max_output_tokens": self._output_budget(max_tokens)}
+            # Same shared quirk rule as the other providers (Gemini accepts
+            # temperature today, so this is normally on — but a future
+            # reasoning-only Gemini marked NO_CUSTOM_TEMPERATURE is handled here).
+            if self._accepts_temperature():
+                config["temperature"] = temperature
+                if temperature > 0:
+                    config["top_p"] = self.top_p
             if system_message:
                 config["system_instruction"] = system_message
 
@@ -185,6 +204,52 @@ class GoogleService(BaseLLMService):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def chat(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        *,
+        is_test: bool = False,
+        **kwargs,
+    ) -> str:
+        """One prompt → one response, via the REAL-TIME generate_content API.
+
+        Overrides the base (which funnels singles through `batch_chat`): the
+        Batch API queues for minutes — right for bulk work, wrong for an
+        interactive call (same fix as ClaudeService.chat)."""
+        config: Dict[str, Any] = {
+            "max_output_tokens": self._output_budget(kwargs.get("max_tokens", self.max_tokens))
+        }
+        if self._accepts_temperature():
+            temperature = kwargs.get("temperature", self.temperature)
+            config["temperature"] = temperature
+            if temperature > 0:
+                config["top_p"] = self.top_p
+        if system_message:
+            config["system_instruction"] = system_message
+        try:
+            resp = self._retry_rate_limit_sync(
+                lambda: self.client.models.generate_content(
+                    model=self.model.model_id, contents=prompt, config=config,
+                ),
+                label=f"Google generate_content ({self.model.model_id})",
+            )
+        except Exception as e:  # noqa: BLE001 — same contract as batch path
+            self._raise_if_account_fatal(e)
+            self._check_fatal_error(e, self.model.model_id)
+            logger.error(f"Google API error: {e}")
+            return make_mechanism_error(str(e))
+        if hasattr(resp, "usage_metadata") and resp.usage_metadata:
+            um = resp.usage_metadata
+            in_tok = getattr(um, "prompt_token_count", 0) or 0
+            out_tok = getattr(um, "candidates_token_count", 0) or 0
+            cost = (
+                in_tok * self.model.input_price
+                + out_tok * self.model.output_price
+            ) / 1_000_000
+            self._record_usage(in_tok, out_tok, cost, is_test)
+        return resp.text if resp.text else "[Empty response]"
 
     def batch_chat(
         self,

@@ -98,9 +98,12 @@ class ClaudeService(BaseLLMService):
             params: Dict[str, Any] = {
                 "model": self.model.model_id,
                 "max_tokens": max_tokens,
-                "temperature": temperature,
                 "messages": messages,
             }
+            # Temperature is gated by the shared quirk rule (Opus 4.7+ rejects
+            # it with a 400). See BaseLLMService._accepts_temperature.
+            if self._accepts_temperature():
+                params["temperature"] = temperature
             if system_message:
                 params["system"] = system_message
             requests.append({"custom_id": item_id, "params": params})
@@ -167,6 +170,50 @@ class ClaudeService(BaseLLMService):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def chat(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        *,
+        is_test: bool = False,
+        **kwargs,
+    ) -> str:
+        """One prompt → one response, via the REAL-TIME Messages API.
+
+        Overrides the base (which funnels singles through `batch_chat`): the
+        Batches API is for bulk work — 50% cheaper but queued for minutes,
+        which makes an interactive single call glacial. Bulk callers still get
+        batch pricing via `batch_chat` below.
+        """
+        params: Dict[str, Any] = {
+            "model": self.model.model_id,
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if self._accepts_temperature():
+            params["temperature"] = kwargs.get("temperature", self.temperature)
+        if system_message:
+            params["system"] = system_message
+        try:
+            msg = self._retry_rate_limit_sync(
+                lambda: self.client.messages.create(**params),
+                label=f"Anthropic messages.create ({self.model.model_id})",
+            )
+        except Exception as e:  # noqa: BLE001 — same contract as batch path
+            self._raise_if_account_fatal(e)
+            self._check_fatal_error(e, self.model.model_id)
+            logger.error(f"Claude API error: {e}")
+            return make_mechanism_error(str(e))
+        if hasattr(msg, "usage") and msg.usage:
+            in_tok = msg.usage.input_tokens or 0
+            out_tok = msg.usage.output_tokens or 0
+            cost = (
+                in_tok * self.model.input_price
+                + out_tok * self.model.output_price
+            ) / 1_000_000
+            self._record_usage(in_tok, out_tok, cost, is_test)
+        return _extract_text(msg)
 
     def batch_chat(
         self,

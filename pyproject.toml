@@ -1,6 +1,6 @@
 [project]
 name = "llm_utils"
-version = "2.2.0"
+version = "2.3.0"
 description = "One interface over LLM providers: OpenAI, Anthropic, Gemini, Bedrock, local HF models, and SLURM-cluster serving."
 readme = "README.md"
 requires-python = ">=3.11"
