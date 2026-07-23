@@ -1,0 +1,24 @@
+# Task files are personal
+TODO.md
+
+# OS junk
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Secrets — defense in depth (no secret files should ever exist here)
+.env
+.env.*
+*.env
+keys/
+secrets/
+*.key
+*.pem
+*credentials*
+*.secret

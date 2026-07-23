@@ -1,0 +1,53 @@
+# llm_utils — design record
+
+## Founding (2026-07-23, owner-ordered)
+
+Extracted from the owner's research repos into a standalone shared-infrastructure repo
+(oikos 4th kind). The problem it solves: the package was vendored in three places and had
+already diverged — updates required manual copy-paste propagation and copies silently
+disagreed. Charter founding test passed: 3+ consumers concretely depend on it today, and
+it owns external access (LLM provider APIs, cluster serving) behind a narrow interface.
+
+**Seed:** the `imaging_text_attacks` copy — identified by the owner as the most-current
+trunk at founding. Published as v2.1.0 (the vendored line called itself 2.0.0; the
+extraction is the first standalone release).
+
+## The three diverged copies (reconciliation map)
+
+| Copy | Status at founding | Plan |
+|---|---|---|
+| `imaging_text_attacks…/src/llm_utils` | most-current trunk (owner-identified) | SEEDED here as v2.1.0 |
+| `llm_agent_security/src/llm_utils` | same ancestry, older (`base_llm_service.py` ~8.5K vs ~13K, `llm_model.py` differs) | diff against trunk; merge any real deltas; then migrate the repo to the pinned dep |
+| psyche `src/psyche/llm_utils` | DELIBERATE heavy fork: added `cost_ledger.py` + `model_policy.py`, slimmed `llm_model.py` ~35K→14K, dropped `cluster_server_manager` | do NOT flatten. Generic improvements (e.g. the slimmer model registry, usage-accounting primitives) merge UP as features/extras; psyche-specific meaning (cost-ledger destination, PRC-jurisdiction routing policy) stays in psyche as thin adapters over this package |
+
+Rule for all future divergence pressure: generic capability merges here; project-specific
+meaning stays consumer-side as an adapter. A consumer needing a new capability requests it
+here (issue / TODO), never forks the package.
+
+## Dependency protocol (the standard consumers follow)
+
+Canonical statement lives in CLAUDE.md (public seam, pinned uv git dep by tag, semver,
+extras, no vendoring, blind-mirror vendoring exception). Design rationale:
+
+- **Pin by tag, not branch:** consumers must never break mid-experiment because the base
+  moved; an upgrade is a deliberate one-line bump the consumer makes when ready. This is
+  what replaces copy-paste propagation.
+- **Public seam = `__init__` exports only:** keeps refactoring freedom inside the package;
+  a MAJOR bump is only needed when exported names/signatures/behavior contracts change.
+- **Extras keep the core light:** API-only consumers (e.g. psyche) must not drag in
+  torch/boto3. `[local]` = HF/transformers serving · `[bedrock]` = AWS. Future serving
+  routes follow the same pattern (new extra, never new core deps).
+- **Secrets are env vars only** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`,
+  AWS env credentials). The repo is public: no secret-manager references anywhere; each
+  consumer fills env vars its own way.
+- **Repo stays public** so public research consumers remain installable/reproducible by
+  outside readers (reviewers, portfolio). Anonymous-review mirrors are the one exception:
+  they vendor the source instead of carrying the dep (git URLs + uv.lock deanonymize);
+  operative checklist in the owner's research-workflow skill (S12).
+
+## Release discipline
+
+- Tag every release `vX.Y.Z`; keep `CHANGELOG.md` from the next release onward.
+- `__version__` in `src/llm_utils/__init__.py` matches `pyproject.toml` version.
+- `httpx` note: the owner's standard for NEW builds is `httpx2`; this extraction keeps
+  `httpx` (existing code, opportunistic-migration rule) — tracked in TODO.

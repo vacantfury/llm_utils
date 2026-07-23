@@ -1,0 +1,25 @@
+{#-
+  Passthrough chat template for models that are NOT chat-tuned.
+
+  Use case: classifiers/judges whose training prompts are already fully
+  formatted (e.g. HarmBench-Llama-2-13b-cls, which expects raw
+  `[INST] <<SYS>>...<</SYS>> [/INST]` text). We send those over the
+  /v1/chat/completions endpoint with a single user message containing
+  the pre-formatted prompt; this template emits the content verbatim
+  with no role wrappers / chat tokens.
+
+  Why this exists: vLLM applies a chat template to every /v1/chat/completions
+  request. Llama-2's tokenizer doesn't ship one, and as of transformers
+  v4.44 vLLM refuses to use a "default" — every request errors out with
+  HTTP 400 unless we provide a template explicitly.
+
+  Behavior:
+    - System messages: emitted as-is, no wrapping.
+    - User/assistant messages: emitted as-is, no role tokens.
+    - Multiple messages: concatenated in order.
+    - add_generation_prompt: ignored (the prompt already ends where
+      generation should begin).
+-#}
+{%- for message in messages -%}
+{{- message['content'] -}}
+{%- endfor -%}
