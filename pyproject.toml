@@ -3,6 +3,8 @@ name = "llm_utils"
 version = "2.3.0"
 description = "One interface over LLM providers: OpenAI, Anthropic, Gemini, Bedrock, local HF models, and SLURM-cluster serving."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     # openai floor: 2.47 is the verified version accepting httpx2 clients as http_client
