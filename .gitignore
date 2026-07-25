@@ -1,0 +1,27 @@
+# Task files are personal
+TODO.md
+
+# Private notes (site-specific cluster/account facts, consumer records) — never public
+text_docs/private/
+
+# OS junk
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Secrets — defense in depth (no secret files should ever exist here)
+.env
+.env.*
+*.env
+keys/
+secrets/
+*.key
+*.pem
+*credentials*
+*.secret
