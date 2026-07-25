@@ -16,14 +16,14 @@ Pin a release tag as a git dependency (recommended — upgrades are a deliberate
 tag bump, so nothing changes under you mid-experiment):
 
 ```bash
-uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v3.0.0"
+uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v3.1.0"
 ```
 
 Heavy serving routes are extras; the core stays API-client-light:
 
 ```bash
-uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v3.0.0"    # torch + transformers
-uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v3.0.0"  # boto3
+uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v3.1.0"    # torch + transformers
+uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v3.1.0"  # boto3
 ```
 
 **Stability contract:** the public seam is what `llm_utils/__init__.py` exports.
@@ -71,6 +71,25 @@ On `ClaudeService`, batches are also **resumable across processes**:
 `submit_batch_chat(...)` returns the provider batch id without waiting;
 persist it anywhere, then `harvest_batch_chat(batch_id)` from any later
 invocation (None while still running); `batch_chat_status(batch_id)` polls.
+
+### Token logprobs
+
+Where the serving route exposes them (the SLURM-cluster vLLM path),
+`batch_chat_with_logprobs` returns `(id, text, logprobs)` triples —
+`batch_chat` plus the OpenAI-schema per-token payload
+(`{"content": [{"token", "logprob", "top_logprobs": [...]}, ...]}`; None on
+transport failure). Typical use: turning a binary classifier verdict into a
+continuous score via the verdict token's confidence.
+
+```python
+results = service.batch_chat_with_logprobs(conversations, top_logprobs=5)
+for conv_id, text, logprobs in results:
+    first_token = logprobs["content"][0] if logprobs else None
+```
+
+`batch_chat`'s `(id, text)` return shape is unchanged. Services whose
+provider API returns no logprobs (Anthropic, Google) raise
+`NotImplementedError`.
 
 ### Structured output
 

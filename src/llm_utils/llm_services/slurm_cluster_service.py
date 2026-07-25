@@ -93,7 +93,11 @@ class SlurmClusterService(BaseLLMService):
         temperature: float,
         max_tokens: int,
         is_test: bool,
-    ) -> str:
+        top_logprobs: Optional[int] = None,
+    ) -> Tuple[str, Optional[dict]]:
+        extra: Dict[str, Any] = {}
+        if top_logprobs is not None:
+            extra = {"logprobs": True, "top_logprobs": top_logprobs}
         async with sem:
             for attempt in range(self.max_retries + 1):
                 try:
@@ -102,18 +106,25 @@ class SlurmClusterService(BaseLLMService):
                         messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
+                        **extra,
                     )
 
                     text = response.choices[0].message.content or ""
                     if not text.strip():
                         text = "[Empty response from vLLM server]"
 
+                    logprobs: Optional[dict] = None
+                    if top_logprobs is not None:
+                        lp = response.choices[0].logprobs
+                        if lp is not None:
+                            logprobs = lp.model_dump()
+
                     if hasattr(response, "usage") and response.usage:
                         in_tok = response.usage.prompt_tokens or 0
                         out_tok = response.usage.completion_tokens or 0
                         self._record_usage(in_tok, out_tok, 0.0, is_test)
 
-                    return text
+                    return text, logprobs
 
                 except Exception as e:
                     err = str(e)
@@ -126,20 +137,21 @@ class SlurmClusterService(BaseLLMService):
                         await asyncio.sleep(wait)
                         continue
                     logger.error(f"vLLM API error: {err}")
-                    return make_mechanism_error(err)
-        return make_mechanism_error("retries exhausted (unreachable)")
+                    return make_mechanism_error(err), None
+        return make_mechanism_error("retries exhausted (unreachable)"), None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def batch_chat(
+    def _batch_chat_impl(
         self,
         conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
-        system_message: Optional[str] = None,
-        is_test: bool = False,
+        system_message: Optional[str],
+        is_test: bool,
+        top_logprobs: Optional[int],
         **kwargs,
-    ) -> List[Tuple[str, str]]:
+    ) -> List[Tuple[str, str, Optional[dict]]]:
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
 
@@ -156,15 +168,54 @@ class SlurmClusterService(BaseLLMService):
                 f"(concurrency={self.max_concurrency})"
             )
 
-            async def _run() -> List[str]:
+            async def _run() -> List[Tuple[str, Optional[dict]]]:
                 sem = asyncio.Semaphore(self.max_concurrency)
                 tasks = [
-                    self._one_call(client, sem, msgs, temperature, max_tokens, is_test)
+                    self._one_call(
+                        client, sem, msgs, temperature, max_tokens, is_test,
+                        top_logprobs,
+                    )
                     for _, msgs in prepared
                 ]
                 return await asyncio.gather(*tasks)
 
             responses = asyncio.run(_run())
-            return [(cid, resp) for (cid, _), resp in zip(prepared, responses)]
+            return [
+                (cid, text, logprobs)
+                for (cid, _), (text, logprobs) in zip(prepared, responses)
+            ]
         finally:
             self.server_manager.release_endpoint(self.model, endpoint)
+
+    def batch_chat(
+        self,
+        conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
+        system_message: Optional[str] = None,
+        is_test: bool = False,
+        **kwargs,
+    ) -> List[Tuple[str, str]]:
+        return [
+            (cid, text)
+            for cid, text, _ in self._batch_chat_impl(
+                conversations, system_message, is_test, None, **kwargs
+            )
+        ]
+
+    def batch_chat_with_logprobs(
+        self,
+        conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
+        system_message: Optional[str] = None,
+        is_test: bool = False,
+        top_logprobs: int = 5,
+        **kwargs,
+    ) -> List[Tuple[str, str, Optional[dict]]]:
+        """``batch_chat`` plus the OpenAI-schema per-token logprob payload.
+
+        vLLM's OpenAI-compatible endpoint returns logprobs when asked
+        (``logprobs=True, top_logprobs=N``); the payload lands as the third
+        element of each result tuple — None on mechanism error or when the
+        server sent none. See ``BaseLLMService.batch_chat_with_logprobs``.
+        """
+        return self._batch_chat_impl(
+            conversations, system_message, is_test, top_logprobs, **kwargs
+        )

@@ -723,7 +723,7 @@ wheels = [
 
 [[package]]
 name = "llm-utils"
-version = "2.3.0"
+version = "3.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -745,7 +745,7 @@ local = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.40" },
+    { name = "anthropic", specifier = ">=0.116" },
     { name = "boto3", marker = "extra == 'bedrock'", specifier = ">=1.34" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx2", specifier = ">=2.9" },

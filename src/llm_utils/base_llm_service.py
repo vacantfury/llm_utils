@@ -369,6 +369,35 @@ class BaseLLMService(ABC):
         """
         raise NotImplementedError
 
+    def batch_chat_with_logprobs(
+        self,
+        conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
+        system_message: Optional[str] = None,
+        is_test: bool = False,
+        top_logprobs: int = 5,
+        **kwargs,
+    ) -> List[Tuple[str, str, Optional[dict]]]:
+        """``batch_chat`` plus per-token logprobs for each sampled response.
+
+        A separate method on purpose: ``batch_chat``'s ``(id, text)`` return
+        shape is load-bearing for every consumer, so logprobs ride a THIRD
+        element here instead of widening it. Each result is
+        ``(id, text, logprobs)`` where *logprobs* is the OpenAI-schema payload
+        (``{"content": [{"token", "logprob", "top_logprobs": [...]}, ...]}``,
+        one entry per generated token, each with the ``top_logprobs``
+        alternatives), or None when the call failed (mechanism error) or the
+        server returned no logprobs.
+
+        Implemented only where the serving route exposes logprobs — the
+        OpenAI-compatible / vLLM cluster path. Anthropic and Google APIs do
+        not return logprobs at all, so their services keep this default
+        (a permanent gap, not a TODO).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose token logprobs "
+            "(only the OpenAI-compatible / vLLM serving routes do)"
+        )
+
     # ------------------------------------------------------------------
     # Single-prompt convenience. `achat` offloads the sync call to a
     # worker thread so it composes with an async runtime without the

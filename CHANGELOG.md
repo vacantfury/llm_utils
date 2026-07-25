@@ -3,6 +3,22 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v3.1.0 — 2026-07-24
+
+- **Added:** `batch_chat_with_logprobs(conversations, system_message=...,
+  top_logprobs=5)` — `batch_chat` plus the OpenAI-schema per-token logprob
+  payload as a third tuple element: `(id, text, logprobs)`, where *logprobs*
+  is `{"content": [{"token", "logprob", "top_logprobs": [...]}, ...]}` or None
+  on mechanism error / when the server sent none. A separate method on
+  purpose: `batch_chat`'s `(id, text)` return shape is load-bearing for every
+  consumer and stays untouched. Implemented on `SlurmClusterService` (vLLM's
+  OpenAI-compatible endpoint returns logprobs when asked); the base default
+  raises `NotImplementedError` — Anthropic and Google APIs do not expose
+  logprobs at all, so their services keep the default (a permanent gap, not a
+  TODO). Motivating consumer: safety-guard threshold calibration — binary
+  `safe`/`unsafe` verdicts have no dial to sweep, the verdict token's
+  confidence is that dial.
+
 ## v3.0.0 — 2026-07-24
 
 Privacy scrub + model-registry refresh. **BREAKING:** the cluster serving route
