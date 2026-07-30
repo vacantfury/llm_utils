@@ -45,9 +45,10 @@ no site-specific hostnames).
 - **Anonymous paper mirrors never carry this repo as a git dep** — the dep URL and
   `uv.lock` carry the owner's GitHub handle. Blind mirrors VENDOR the package source
   (operative rule: the global research-workflow skill, S12 pre-submit checklist).
-- **Shared-private repos never carry this dep either** (owner-ordered 2026-07-24): a
-  repo with outside collaborators on private hosting keeps self-contained LLM code
-  instead of depending on a personal-account repo.
+- **Shared-private repos MAY carry this dep** (owner ruling 2026-07-30, superseding
+  the 2026-07-24 exclusion): the package is public, so outside collaborators install
+  the same pinned git dep as any consumer. Only anonymous paper mirrors keep the
+  vendoring rule above.
 
 ## Layout
 
