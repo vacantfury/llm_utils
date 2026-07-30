@@ -25,6 +25,47 @@ logger = get_logger(__name__)
 ClusterConfigDict = Dict[str, Any]
 
 
+def _slurm_time_to_seconds(t: Any) -> Optional[int]:
+    """Parse a SLURM time spec to seconds. Accepts ``D-HH:MM:SS``,
+    ``D-HH:MM``, ``D-HH``, ``HH:MM:SS``, ``MM:SS``, bare minutes (``"90"``),
+    or an int (minutes) — sbatch's own accepted forms. Returns None if
+    unparseable."""
+    if isinstance(t, int):
+        return t * 60
+    s = str(t).strip()
+    days = 0
+    if "-" in s:
+        d, s = s.split("-", 1)
+        try:
+            days = int(d)
+        except ValueError:
+            return None
+    try:
+        nums = [int(p) for p in s.split(":")]
+    except ValueError:
+        return None
+    if "-" in str(t):
+        # After a day part: HH[:MM[:SS]]
+        if len(nums) == 1:
+            h, m, sec = nums[0], 0, 0
+        elif len(nums) == 2:
+            h, m, sec = nums[0], nums[1], 0
+        elif len(nums) == 3:
+            h, m, sec = nums
+        else:
+            return None
+    else:
+        if len(nums) == 1:          # bare minutes
+            h, m, sec = 0, nums[0], 0
+        elif len(nums) == 2:        # MM:SS
+            h, m, sec = 0, nums[0], nums[1]
+        elif len(nums) == 3:        # HH:MM:SS
+            h, m, sec = nums
+        else:
+            return None
+    return ((days * 24 + h) * 60 + m) * 60 + sec
+
+
 class ClusterModelServerManager:
     """
     Manages vLLM server lifecycle on SLURM cluster with dynamic endpoint pool.
@@ -73,7 +114,8 @@ class ClusterModelServerManager:
 
         Args:
             model: The cluster model to serve.
-            config: Cluster config dict (from load_conf("llm", section="cluster")).
+            config: Cluster config dict (the consumer supplies it — this
+                package has no config-file knowledge).
         """
         if model in self._jobs and self._jobs[model]:
             logger.info(f"Servers already submitted for {model.model_id}")
@@ -393,87 +435,122 @@ class ClusterModelServerManager:
         last_recheck = 0.0
 
         while not self._stop_monitor.is_set():
+            # Both phases are exception-guarded: an uncaught error would kill
+            # the monitor thread permanently — orphaning every undiscovered
+            # job and ending pool health-checks for the rest of the run.
             # ---- Phase 1: discovery ----
-            for model, jobs in list(self._jobs.items()):
-                for job_info in jobs:
-                    if job_info["discovered"]:
-                        continue
-
-                    job_id = job_info["job_id"]
-                    port = job_info["port"]
-                    instance_id = job_info["instance_id"]
-                    instance_suffix = f"[{instance_id}]" if instance_id > 0 else ""
-
-                    state = self._get_job_state(job_id)
-
-                    if state is None:
-                        model_safe_name = model.name.lower()
-                        logger.warning(
-                            f"Server{instance_suffix} (job {job_id}) failed. "
-                            f"Check logs/vllm_{model_safe_name}_*.err")
-                        job_info["discovered"] = True
-                        continue
-
-                    if state == "PENDING":
-                        # Log first observation only, then quietly poll.
-                        if not job_info.get("_logged_pending"):
-                            logger.info(
-                                f"Server{instance_suffix} (job {job_id}) "
-                                f"still PENDING in SLURM queue; will keep polling.")
-                            job_info["_logged_pending"] = True
-                        continue
-
-                    node = self._resolve_job_node(job_id)
-                    if not node:
-                        # Log first N occurrences so we know SLURM isn't surfacing
-                        # the node assignment yet — silent-forever before this fix.
-                        attempts = job_info.get("_node_resolve_attempts", 0) + 1
-                        job_info["_node_resolve_attempts"] = attempts
-                        if attempts <= 3 or attempts % 30 == 0:
-                            logger.info(
-                                f"Server{instance_suffix} (job {job_id}) state="
-                                f"{state} but scontrol hasn't returned a NodeList/"
-                                f"NodeAddr yet (attempt {attempts}). Retrying.")
-                        continue
-
-                    endpoint = f"http://{node}:{port}/v1"
-                    healthy, err = self._health_check(endpoint)
-
-                    if not healthy:
-                        # The previously-silent failure mode. Could be:
-                        #   - vLLM still loading weights / compiling graphs
-                        #   - inter-partition network unreachable (firewall, etc.)
-                        #   - wrong NodeAddr resolved
-                        #   - vLLM crashed but SLURM hasn't noticed
-                        # Log first few + every Nth so user sees something.
-                        attempts = job_info.get("_health_check_attempts", 0) + 1
-                        job_info["_health_check_attempts"] = attempts
-                        if attempts <= 3 or attempts % 12 == 0:  # first 3, then ~every 2min
-                            logger.info(
-                                f"Server{instance_suffix} (job {job_id}) at "
-                                f"{endpoint} not yet healthy "
-                                f"(attempt {attempts}, err={err}). Retrying.")
-
-                    if healthy:
-                        with self._pool_lock:
-                            self._pool[model].append({
-                                "endpoint": endpoint,
-                                "is_available": True,
-                                "job_id": job_id,
-                            })
-                        job_info["discovered"] = True
-                        logger.info(
-                            f"Server{instance_suffix} ready at {endpoint} "
-                            f"(pool size: {len(self._pool[model])})")
-                        self._pool_changed.set()
+            try:
+                self._discovery_pass()
+            except Exception:
+                logger.exception("monitor discovery pass failed — continuing")
 
             # ---- Phase 2: re-health-check discovered endpoints ----
-            now = time.time()
-            if now - last_recheck >= recheck_interval:
-                last_recheck = now
-                self._recheck_pool_health()
+            try:
+                now = time.time()
+                if now - last_recheck >= recheck_interval:
+                    last_recheck = now
+                    self._recheck_pool_health()
+            except Exception:
+                logger.exception("monitor health recheck failed — continuing")
 
             self._stop_monitor.wait(timeout=poll_interval)
+
+    def _discovery_pass(self) -> None:
+        """One discovery sweep over undiscovered jobs (see _monitor_loop)."""
+        for model, jobs in list(self._jobs.items()):
+            for job_info in jobs:
+                if job_info["discovered"]:
+                    continue
+
+                job_id = job_info["job_id"]
+                port = job_info["port"]
+                instance_id = job_info["instance_id"]
+                instance_suffix = f"[{instance_id}]" if instance_id > 0 else ""
+
+                state = self._get_job_state(job_id)
+
+                if state == self.STATE_QUERY_FAILED:
+                    # Transient squeue hiccup (the controller is known to
+                    # be intermittently slow) — leave the job undiscovered
+                    # and re-examine next poll instead of blackholing a
+                    # live server.
+                    fails = job_info.get("_state_query_failures", 0) + 1
+                    job_info["_state_query_failures"] = fails
+                    if fails <= 3 or fails % 30 == 0:
+                        logger.info(
+                            f"squeue query failed for job {job_id} "
+                            f"(attempt {fails}); will retry")
+                    continue
+                job_info["_state_query_failures"] = 0
+
+                if state is None:
+                    model_safe_name = model.name.lower()
+                    logger.warning(
+                        f"Server{instance_suffix} (job {job_id}) failed. "
+                        f"Check logs/vllm_{model_safe_name}_*.err")
+                    job_info["discovered"] = True
+                    continue
+
+                if state == "PENDING":
+                    # Log first observation only, then quietly poll.
+                    if not job_info.get("_logged_pending"):
+                        logger.info(
+                            f"Server{instance_suffix} (job {job_id}) "
+                            f"still PENDING in SLURM queue; will keep polling.")
+                        job_info["_logged_pending"] = True
+                    continue
+
+                node = self._resolve_job_node(job_id)
+                if not node:
+                    # Log first N occurrences so we know SLURM isn't surfacing
+                    # the node assignment yet — silent-forever before this fix.
+                    attempts = job_info.get("_node_resolve_attempts", 0) + 1
+                    job_info["_node_resolve_attempts"] = attempts
+                    if attempts <= 3 or attempts % 30 == 0:
+                        logger.info(
+                            f"Server{instance_suffix} (job {job_id}) state="
+                            f"{state} but scontrol hasn't returned a NodeList/"
+                            f"NodeAddr yet (attempt {attempts}). Retrying.")
+                    continue
+
+                endpoint = f"http://{node}:{port}/v1"
+                healthy, err = self._health_check(endpoint)
+
+                if not healthy:
+                    # The previously-silent failure mode. Could be:
+                    #   - vLLM still loading weights / compiling graphs
+                    #   - inter-partition network unreachable (firewall, etc.)
+                    #   - wrong NodeAddr resolved
+                    #   - vLLM crashed but SLURM hasn't noticed
+                    # Log first few + every Nth so user sees something.
+                    attempts = job_info.get("_health_check_attempts", 0) + 1
+                    job_info["_health_check_attempts"] = attempts
+                    if attempts <= 3 or attempts % 12 == 0:  # first 3, then ~every 2min
+                        logger.info(
+                            f"Server{instance_suffix} (job {job_id}) at "
+                            f"{endpoint} not yet healthy "
+                            f"(attempt {attempts}, err={err}). Retrying.")
+
+                if healthy:
+                    with self._pool_lock:
+                        # Guard the teardown race: if this model was shut
+                        # down (or shutdown_all cleared the pool) while we
+                        # were health-checking, do NOT resurrect an
+                        # endpoint for a cancelled job.
+                        if (model not in self._pool
+                                or self._stop_monitor.is_set()):
+                            continue
+                        self._pool[model].append({
+                            "endpoint": endpoint,
+                            "is_available": True,
+                            "job_id": job_id,
+                        })
+                        pool_size = len(self._pool[model])
+                    job_info["discovered"] = True
+                    logger.info(
+                        f"Server{instance_suffix} ready at {endpoint} "
+                        f"(pool size: {pool_size})")
+                    self._pool_changed.set()
 
     def _recheck_pool_health(self) -> None:
         """Re-ping every pool entry's /health; evict any that fail.
@@ -534,11 +611,19 @@ class ClusterModelServerManager:
             if all_excluded else ""
         )
 
-        # Per-cluster wall cap (conf/clusters/<profile>.yaml::max_slurm_time_limit);
-        # MAX_SLURM_TIME_LIMIT stays as the fail-safe fallback (a conservative 8h).
+        # Per-cluster wall cap (config key max_slurm_time_limit);
+        # MAX_SLURM_TIME_LIMIT stays as the fail-safe fallback (a conservative
+        # 8h). Compared NUMERICALLY — string comparison mis-clamps unpadded
+        # specs ('4:00:00' > '08:00:00' lexicographically).
         max_wall = config.get("max_slurm_time_limit") or MAX_SLURM_TIME_LIMIT
         time_limit = config["time_limit"]
-        if time_limit and time_limit > max_wall:
+        limit_s = _slurm_time_to_seconds(time_limit)
+        max_s = _slurm_time_to_seconds(max_wall)
+        if limit_s is None:
+            logger.warning(
+                f"unparseable time_limit '{time_limit}' — passing through to "
+                f"sbatch unclamped")
+        elif max_s is not None and limit_s > max_s:
             logger.warning(
                 f"time_limit '{time_limit}' exceeds cluster max "
                 f"'{max_wall}', clamping")
@@ -561,7 +646,7 @@ class ClusterModelServerManager:
         if config["num_gpus"] > 1:
             vllm_args.append(f"--tensor-parallel-size {config['num_gpus']}")
         # Some checkpoints (e.g. InternVL) ship custom modeling code in their HF
-        # repo and require vLLM to trust it. Per-model flag in conf/llm, default off.
+        # repo and require vLLM to trust it. Per-model config flag, default off.
         if config.get("trust_remote_code"):
             vllm_args.append("--trust-remote-code")
         # Chat template resolution: YAML override → ModelSpec → None.
@@ -574,11 +659,8 @@ class ClusterModelServerManager:
         if chat_template_name:
             chat_template_dir = Path(__file__).parent / "chat_templates"
             template_file = chat_template_dir / f"{chat_template_name}.jinja"
-            # Existence is also validated at config-load time by
-            # LLMConfig._check_chat_template_exists; if we get here with a
-            # missing file, that validator was bypassed (e.g., ad-hoc
-            # callers). Raise loudly — silent fallback to vLLM's default
-            # is how the HarmBench 400-on-every-request bug stayed hidden.
+            # Raise loudly on a missing template file — a silent fallback to
+            # vLLM's default template once hid a 400-on-every-request bug.
             if not template_file.exists():
                 raise FileNotFoundError(
                     f"chat_template={chat_template_name!r} for {model.model_id} "
@@ -663,6 +745,11 @@ class ClusterModelServerManager:
         ])
 
         script = "\n".join(sbatch_lines) + "\n"
+
+        # slurmstepd opens the --output/--error files (relative to the submit
+        # cwd) BEFORE the script body runs, so the in-script `mkdir -p logs`
+        # is too late on a fresh directory — create it at generation time.
+        Path("logs").mkdir(exist_ok=True)
 
         sbatch_path = self._sbatch_dir / f"vllm_{model_safe_name}{instance_suffix}.sbatch"
         sbatch_path.write_text(script)
@@ -813,8 +900,16 @@ class ClusterModelServerManager:
         self._gpu_type_exclude_cache[cache_key] = nodes
         return nodes
 
+    # Sentinel: the squeue QUERY itself failed (controller slow / timeout) —
+    # distinct from None, which means the job has left the queue (finished or
+    # failed). Callers must treat this as "unknown, retry later", never as a
+    # dead job — a live server must not be blackholed by one slow squeue.
+    STATE_QUERY_FAILED = "QUERY_FAILED"
+
     def _get_job_state(self, job_id: str) -> Optional[str]:
-        """Get the current SLURM state of a job (RUNNING, PENDING, etc.)."""
+        """Get the current SLURM state of a job (RUNNING, PENDING, etc.).
+        None = the job is no longer in the queue; STATE_QUERY_FAILED = squeue
+        itself failed (transient — retry)."""
         config = next(iter(self.model_configs.values()), {})
         cmd_timeout = config.get("slurm_cmd_timeout", 15)
 
@@ -825,7 +920,7 @@ class ClusterModelServerManager:
             state = result.stdout.strip()
             return state or None
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return None
+            return self.STATE_QUERY_FAILED
 
     def _health_check(self, endpoint: str) -> tuple[bool, Optional[str]]:
         """

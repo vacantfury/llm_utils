@@ -12,18 +12,20 @@ Credentials come from the standard AWS credential chain (a named profile / env
 ``AWS_*`` / instance role) — NOT a bearer token. Same code on every host; only
 the per-host AWS credential provisioning differs, exactly like the other API keys.
 
-Config knobs (from ``conf/llm`` merge or kwargs), all optional:
+Config knobs (constructor kwargs, or a consumer's config loader), all optional:
   - ``aws_profile``  — named profile; else ``AWS_PROFILE`` env; else default chain.
   - ``aws_region``   — else ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` env; else us-east-1.
 """
 import asyncio
 import base64
 import os
-import random
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..base_llm_service import BaseLLMService, make_mechanism_error
-from ..llm_model import LLMModel, ModelQuirk
+from ..base_llm_service import (
+    BaseLLMService, _backoff_seconds, is_rate_limit_error, make_mechanism_error,
+)
+from ..exceptions import FatalModelError, InvalidCredentialError
+from ..llm_model import LLMModel
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger
 
@@ -38,9 +40,6 @@ _BEDROCK_IMAGE_FORMATS = {
     "image/gif": "gif",
     "image/webp": "webp",
 }
-
-# boto3 error substrings that mean "back off and retry" vs "fail this row".
-_THROTTLE_MARKERS = ("ThrottlingException", "TooManyRequests", "Throttling", "429")
 
 # Errors that mean the AWS CREDENTIALS are bad/expired — they will NOT recover
 # mid-run, so retrying every row is pointless (slow) and the right response is to
@@ -57,14 +56,18 @@ _CREDENTIAL_MARKERS = (
 _ACCESS_MARKERS = ("AccessDeniedException", "AccessDenied")
 
 
-class BedrockCredentialsError(RuntimeError):
+class BedrockCredentialsError(InvalidCredentialError):
     """Raised (fail-fast) when Bedrock creds are expired/invalid, so a run stops
-    with a clear message instead of grinding every row into a cryptic error."""
+    with a clear message instead of grinding every row into a cryptic error.
+    Subclasses ``InvalidCredentialError`` so a runner's account-fatal handler
+    (``except AccountFatalError``) catches expired AWS creds too."""
 
 
-class BedrockAccessError(RuntimeError):
+class BedrockAccessError(FatalModelError):
     """Raised (fail-fast) when a Bedrock model can't be invoked with the current
-    account/creds (not enabled, no permission, or a bad model id)."""
+    account/creds (not enabled, no permission, or a bad model id). Subclasses
+    ``FatalModelError`` — per-model, so a runner can mark this model failed and
+    continue with others."""
 
 
 class BedrockService(BaseLLMService):
@@ -72,10 +75,10 @@ class BedrockService(BaseLLMService):
 
     DEFAULT_REGION = "us-east-1"
 
-    def __init__(self, model: LLMModel, config=None, **kwargs):
+    def __init__(self, model: LLMModel, **kwargs):
         super().__init__(
-            # Conservative default for a beta allocation with unknown TPM/RPM;
-            # throttling is retried with backoff. Raise via conf/llm if the
+            # Conservative default for accounts with unknown TPM/RPM limits;
+            # throttling is retried with backoff. Raise via kwargs if the
             # account's limits allow.
             max_concurrency=kwargs.pop("max_concurrency", 8),
             max_retries=kwargs.pop("max_retries", 5),
@@ -100,8 +103,8 @@ class BedrockService(BaseLLMService):
             import boto3
         except ImportError as e:  # pragma: no cover
             raise RuntimeError(
-                "boto3 is required for Provider.BEDROCK — `uv add boto3` (or install "
-                "into this cluster's env). See TODO item 2."
+                "boto3 is required for Provider.BEDROCK — install the extra: "
+                '`uv add "llm_utils[bedrock]"` (or `uv add boto3`).'
             ) from e
 
         session = (
@@ -142,7 +145,8 @@ class BedrockService(BaseLLMService):
 
     def _inference_config(self, temperature: float, max_tokens: int) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {"maxTokens": max_tokens}
-        if not self.model.has_quirk(ModelQuirk.NO_CUSTOM_TEMPERATURE):
+        # Shared quirk rule — see BaseLLMService._accepts_temperature.
+        if self._accepts_temperature():
             cfg["temperature"] = temperature
         return cfg
 
@@ -224,15 +228,17 @@ class BedrockService(BaseLLMService):
                             f"is exactly the invocable id (Claude = us.*-prefixed "
                             f"inference profile; qwen/deepseek/nova = bare on-demand id)."
                         ) from e
-                    is_throttle = any(m in err for m in _THROTTLE_MARKERS)
-                    if is_throttle and attempt < self.max_retries:
-                        wait = (2 ** attempt) + random.random()
+                    if is_rate_limit_error(e) and attempt < self.max_retries:
+                        wait = _backoff_seconds(attempt)
                         logger.warning(
                             "Bedrock throttled, retry %d/%d in %.1fs",
                             attempt + 1, self.max_retries, wait,
                         )
                         await asyncio.sleep(wait)
                         continue
+                    # Per-model 404 / not-found → FatalModelError (run can
+                    # continue on other models), same as the sibling services.
+                    self._check_fatal_error(e, self.model.model_id)
                     logger.error("Bedrock converse error (%s): %s", self.model.model_id, err)
                     return make_mechanism_error(err)
         return make_mechanism_error("retries exhausted (unreachable)")
@@ -250,9 +256,9 @@ class BedrockService(BaseLLMService):
     ) -> List[Tuple[str, str]]:
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
-        # Clamp to the model's provider-enforced output ceiling. Bedrock 400s if
-        # maxTokens exceeds a model's hard limit (Amazon Nova = 10000 vs the
-        # project default 16384); the registry carries the per-model cap.
+        # Clamp to the model's provider-enforced output ceiling. Bedrock 400s
+        # if maxTokens exceeds a model's hard limit (the registry carries the
+        # per-model cap, e.g. the Amazon Nova rows).
         cap = getattr(self.model, "max_output_tokens", None)
         if cap is not None and max_tokens > cap:
             logger.debug(

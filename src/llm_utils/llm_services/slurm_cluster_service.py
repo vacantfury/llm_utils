@@ -6,13 +6,14 @@ Acquires an endpoint from ``ClusterModelServerManager`` for each batch call
 and releases it afterwards so multiple tasks can share the server pool.
 """
 import asyncio
-import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx2
 from openai import AsyncOpenAI
 
-from ..base_llm_service import BaseLLMService, make_mechanism_error
+from ..base_llm_service import (
+    BaseLLMService, _backoff_seconds, is_rate_limit_error, make_mechanism_error,
+)
 from ..llm_model import LLMModel
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger
@@ -23,7 +24,7 @@ logger = get_logger(__name__)
 class SlurmClusterService(BaseLLMService):
     """Service for models served on a SLURM cluster via a vLLM HTTP server."""
 
-    def __init__(self, model: LLMModel, config=None, **kwargs):
+    def __init__(self, model: LLMModel, **kwargs):
         server_manager = kwargs.pop("server_manager", None)
         if not server_manager:
             raise ValueError(
@@ -40,6 +41,10 @@ class SlurmClusterService(BaseLLMService):
         self.model = model
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
+        # Extra request params merged verbatim into every API call (vLLM's
+        # OpenAI-compatible endpoint accepts most OpenAI params) — parity
+        # with the OpenAI family's api_params seam.
+        self.api_params: Dict[str, Any] = kwargs.get("api_params") or {}
         self.server_manager = server_manager
 
         logger.info(f"Initialized cluster service for {model.model_id} (dynamic pool)")
@@ -94,24 +99,32 @@ class SlurmClusterService(BaseLLMService):
         max_tokens: int,
         is_test: bool,
         top_logprobs: Optional[int] = None,
+        extra_params: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Optional[dict]]:
-        extra: Dict[str, Any] = {}
+        params: Dict[str, Any] = {
+            "model": self.model.model_id,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        # Shared quirk rule — see BaseLLMService._accepts_temperature.
+        if self._accepts_temperature():
+            params["temperature"] = temperature
+        if self.api_params:
+            params.update(self.api_params)
+        if extra_params:
+            params.update(extra_params)
         if top_logprobs is not None:
-            extra = {"logprobs": True, "top_logprobs": top_logprobs}
+            params.update({"logprobs": True, "top_logprobs": top_logprobs})
         async with sem:
             for attempt in range(self.max_retries + 1):
                 try:
-                    response = await client.chat.completions.create(
-                        model=self.model.model_id,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        **extra,
-                    )
+                    response = await client.chat.completions.create(**params)
 
-                    text = response.choices[0].message.content or ""
+                    choice = response.choices[0]
+                    text = choice.message.content or ""
                     if not text.strip():
-                        text = "[Empty response from vLLM server]"
+                        text = (f"[LLM response filtered out due to: "
+                                f"{choice.finish_reason}]")
 
                     logprobs: Optional[dict] = None
                     if top_logprobs is not None:
@@ -128,14 +141,17 @@ class SlurmClusterService(BaseLLMService):
 
                 except Exception as e:
                     err = str(e)
-                    if ("429" in err or "rate" in err.lower()) and attempt < self.max_retries:
-                        wait = (2 ** attempt) + random.random()
+                    if is_rate_limit_error(e) and attempt < self.max_retries:
+                        wait = _backoff_seconds(attempt)
                         logger.warning(
                             f"Rate limit hit, retry {attempt + 1}/{self.max_retries} "
                             f"in {wait:.1f}s"
                         )
                         await asyncio.sleep(wait)
                         continue
+                    # Per-model 404 (a model the server never loaded) →
+                    # FatalModelError, same contract as the API services.
+                    self._check_fatal_error(e, self.model.model_id)
                     logger.error(f"vLLM API error: {err}")
                     return make_mechanism_error(err), None
         return make_mechanism_error("retries exhausted (unreachable)"), None
@@ -155,9 +171,9 @@ class SlurmClusterService(BaseLLMService):
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
 
+        extra_params = kwargs.get("api_params")
         endpoint = self.server_manager.acquire_endpoint(self.model)
         try:
-            client = self._make_async_client(endpoint)
             prepared = [
                 (cid, self._format_conversation(msgs, system_message))
                 for cid, msgs in conversations
@@ -169,15 +185,21 @@ class SlurmClusterService(BaseLLMService):
             )
 
             async def _run() -> List[Tuple[str, Optional[dict]]]:
-                sem = asyncio.Semaphore(self.max_concurrency)
-                tasks = [
-                    self._one_call(
-                        client, sem, msgs, temperature, max_tokens, is_test,
-                        top_logprobs,
-                    )
-                    for _, msgs in prepared
-                ]
-                return await asyncio.gather(*tasks)
+                # Client is created AND closed inside the event loop — one
+                # per call, never leaked (httpx2 pools die with the client).
+                client = self._make_async_client(endpoint)
+                try:
+                    sem = asyncio.Semaphore(self.max_concurrency)
+                    tasks = [
+                        self._one_call(
+                            client, sem, msgs, temperature, max_tokens, is_test,
+                            top_logprobs, extra_params,
+                        )
+                        for _, msgs in prepared
+                    ]
+                    return await asyncio.gather(*tasks)
+                finally:
+                    await client.close()
 
             responses = asyncio.run(_run())
             return [
@@ -216,6 +238,10 @@ class SlurmClusterService(BaseLLMService):
         element of each result tuple — None on mechanism error or when the
         server sent none. See ``BaseLLMService.batch_chat_with_logprobs``.
         """
+        if top_logprobs is None:
+            raise ValueError(
+                "top_logprobs must be a positive int — use batch_chat for a "
+                "no-logprobs run")
         return self._batch_chat_impl(
             conversations, system_message, is_test, top_logprobs, **kwargs
         )

@@ -1,6 +1,6 @@
 [project]
 name = "llm_utils"
-version = "4.0.0"
+version = "5.0.0"
 description = "One interface over LLM providers: OpenAI, Anthropic, Gemini, Bedrock, local HF models, and SLURM-cluster serving."
 readme = "README.md"
 license = "MIT"
@@ -33,3 +33,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_utils"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]

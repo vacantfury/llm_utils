@@ -16,8 +16,8 @@ What lives here (static, code-time facts about the model):
   - quirks: API-side behavior flags (e.g., GPT-5 only accepts temperature=1).
 
 What does NOT live here (deployment choices, not model facts):
-  - num_gpus, mem_gb, dtype, the actually-served max_model_len, chat_template,
-    gpu_types_excluded — all in conf/llm/<model>.yaml.
+  - num_gpus, mem_gb, dtype, the actually-served max_model_len,
+    gpu_types_excluded — those live in the CONSUMER's cluster config.
 
 Adding a new model: append one `LLMModel.<NAME> = ModelSpec(...)` row.
 Adding a new per-model fact: add a field to `ModelSpec`, populate selected
@@ -119,9 +119,10 @@ _GPT41_QUIRKS = frozenset({
 # Newer Claude models reject `temperature` (400). They use `max_tokens` (not
 # `max_completion_tokens`), so only the no-temperature quirk applies.
 _NO_TEMP = frozenset({ModelQuirk.NO_CUSTOM_TEMPERATURE})
-# Gemini rows that think by default (2.5 flash/pro, 3.x flash/pro): thought
-# tokens bill and cap as output tokens.
-_GEMINI_THINKING = frozenset({ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET})
+# Rows that think by default (Gemini 2.5/3.x flash+pro, Claude Opus 5 /
+# Fable 5): thought tokens bill and cap as OUTPUT tokens, so services grant
+# extra output budget and count thought tokens in recorded usage.
+_THINKING_BUDGET = frozenset({ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET})
 
 
 class LLMModel(Enum):
@@ -182,6 +183,10 @@ class LLMModel(Enum):
     CLAUDE_SONNET_4_6 = ModelSpec("claude-sonnet-4-6",          Provider.ANTHROPIC, 3.00, 15.00)
     CLAUDE_SONNET_5   = ModelSpec("claude-sonnet-5",            Provider.ANTHROPIC, 3.00, 15.00,  # intro $2/$10 through 2026-08-31
         max_context_len=1_000_000, quirks=_NO_TEMP)
+    # NOTE (2026-07-30, per the Anthropic pricing page): Opus 4, Opus 4.1 and
+    # Sonnet 4 are deprecated/retired on the DIRECT API (still served via
+    # Bedrock / Google Cloud). Rows kept for reference; expect direct calls
+    # to start failing — prefer the 4.5+ rows.
     # Opus
     CLAUDE_OPUS_4   = ModelSpec("claude-opus-4-20250514",   Provider.ANTHROPIC, 15.00, 75.00)
     CLAUDE_OPUS_4_1 = ModelSpec("claude-opus-4-1-20250805", Provider.ANTHROPIC, 15.00, 75.00)
@@ -190,28 +195,28 @@ class LLMModel(Enum):
     CLAUDE_OPUS_4_7 = ModelSpec("claude-opus-4-7",          Provider.ANTHROPIC, 5.00,  25.00, quirks=_NO_TEMP)
     CLAUDE_OPUS_4_8 = ModelSpec("claude-opus-4-8",          Provider.ANTHROPIC, 5.00,  25.00, quirks=_NO_TEMP)
     CLAUDE_OPUS_5   = ModelSpec("claude-opus-5",            Provider.ANTHROPIC, 5.00,  25.00,
-        max_context_len=1_000_000, quirks=_NO_TEMP)  # thinking ON by default (unlike 4.7/4.8)
+        max_context_len=1_000_000, quirks=_NO_TEMP | _THINKING_BUDGET)  # thinking ON by default (unlike 4.7/4.8)
     # Frontier tier. Always-on thinking; requires 30-day data retention (a
     # zero-data-retention org gets a 400 on every request).
     CLAUDE_FABLE_5  = ModelSpec("claude-fable-5",           Provider.ANTHROPIC, 10.00, 50.00,
-        max_context_len=1_000_000, quirks=_NO_TEMP)
+        max_context_len=1_000_000, quirks=_NO_TEMP | _THINKING_BUDGET)
     # Haiku
     CLAUDE_HAIKU_4_5 = ModelSpec("claude-haiku-4-5-20251001", Provider.ANTHROPIC, 1.00, 5.00)
 
     # ──────── Google ────────
     # gemini-2.0-flash + gemini-2.0-flash-lite REMOVED 2026-07-24 (shut down
     # 2026-06-01 — API calls error). The 2.5 trio below shuts down 2026-10-16.
-    GEMINI_2_5_FLASH               = ModelSpec("gemini-2.5-flash",                Provider.GOOGLE, 0.30,  2.50, quirks=_GEMINI_THINKING)
+    GEMINI_2_5_FLASH               = ModelSpec("gemini-2.5-flash",                Provider.GOOGLE, 0.30,  2.50, quirks=_THINKING_BUDGET)
     GEMINI_2_5_FLASH_LITE          = ModelSpec("gemini-2.5-flash-lite",           Provider.GOOGLE, 0.10,  0.40)   # price corrected 2026-07-24
-    GEMINI_2_5_PRO                 = ModelSpec("gemini-2.5-pro",                  Provider.GOOGLE, 1.25,  10.00, quirks=_GEMINI_THINKING)
-    GEMINI_3_FLASH_PREVIEW         = ModelSpec("gemini-3-flash-preview",          Provider.GOOGLE, 0.50,  3.00, quirks=_GEMINI_THINKING)  # superseded; migrate to 3.6-flash
-    # gemini-3-pro-preview + gemini-3.1-flash-lite-preview REMOVED 2026-07-12 (dead — 404 since Mar/May 2026, verified); use the GA IDs below.
-    GEMINI_3_1_PRO_PREVIEW         = ModelSpec("gemini-3.1-pro-preview",          Provider.GOOGLE, 2.00,  12.00, quirks=_GEMINI_THINKING)  # still the newest pro (no GA pro as of 2026-07-24)
+    GEMINI_2_5_PRO                 = ModelSpec("gemini-2.5-pro",                  Provider.GOOGLE, 1.25,  10.00, quirks=_THINKING_BUDGET)
+    GEMINI_3_FLASH_PREVIEW         = ModelSpec("gemini-3-flash-preview",          Provider.GOOGLE, 0.50,  3.00, quirks=_THINKING_BUDGET)  # superseded; migrate to 3.6-flash
+    # gemini-3-pro-preview + gemini-3.1-flash-lite-preview REMOVED 2026-07-12 (dead — 404, verified 2026-07-12); use the GA IDs below.
+    GEMINI_3_1_PRO_PREVIEW         = ModelSpec("gemini-3.1-pro-preview",          Provider.GOOGLE, 2.00,  12.00, quirks=_THINKING_BUDGET)  # still the newest pro (no GA pro as of 2026-07-24)
     GEMINI_3_1_FLASH_LITE          = ModelSpec("gemini-3.1-flash-lite",           Provider.GOOGLE, 0.25,  1.50)   # GA (replaced dead preview)
-    GEMINI_3_5_FLASH               = ModelSpec("gemini-3.5-flash",                Provider.GOOGLE, 1.50,  9.00, quirks=_GEMINI_THINKING)   # GA ~May 2026 — JUDGE pick
+    GEMINI_3_5_FLASH               = ModelSpec("gemini-3.5-flash",                Provider.GOOGLE, 1.50,  9.00, quirks=_THINKING_BUDGET)   # GA ~May 2026 — JUDGE pick
     # GA 2026-07-21 pair (added 2026-07-24):
     GEMINI_3_5_FLASH_LITE          = ModelSpec("gemini-3.5-flash-lite",           Provider.GOOGLE, 0.30,  2.50)
-    GEMINI_3_6_FLASH               = ModelSpec("gemini-3.6-flash",                Provider.GOOGLE, 1.50,  7.50, quirks=_GEMINI_THINKING)   # current flash flagship
+    GEMINI_3_6_FLASH               = ModelSpec("gemini-3.6-flash",                Provider.GOOGLE, 1.50,  7.50, quirks=_THINKING_BUDGET)   # current flash flagship
 
     # ──────── DeepSeek (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
     DEEPSEEK_V4_FLASH = ModelSpec("deepseek-v4-flash", Provider.DEEPSEEK, 0.14,  0.28, family="deepseek")
@@ -293,15 +298,20 @@ class LLMModel(Enum):
     BEDROCK_CLAUDE_HAIKU_4_5 = ModelSpec(
         "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider.BEDROCK, 1.00, 5.00,
         max_context_len=200_000, family="claude", alignment_tier="strong")
+    # Same NO_CUSTOM_TEMPERATURE quirk as the direct-API twins (Sonnet 5 /
+    # Opus 4.8 / Fable 5 reject a custom temperature on Bedrock too).
     BEDROCK_CLAUDE_SONNET_5 = ModelSpec(
         "us.anthropic.claude-sonnet-5", Provider.BEDROCK, 3.00, 15.00,  # promo $2/$10 through 2026-08-31
-        max_context_len=200_000, family="claude", alignment_tier="strong")
+        max_context_len=200_000, family="claude", alignment_tier="strong",
+        quirks=_NO_TEMP)
     BEDROCK_CLAUDE_OPUS_4_8 = ModelSpec(        # flagship-tier target/judge
         "us.anthropic.claude-opus-4-8", Provider.BEDROCK, 5.00, 25.00,
-        max_context_len=200_000, family="claude", alignment_tier="strong")
+        max_context_len=200_000, family="claude", alignment_tier="strong",
+        quirks=_NO_TEMP)
     BEDROCK_CLAUDE_FABLE_5 = ModelSpec(         # newest flagship; list price unpublished → UNTRACKED
         "us.anthropic.claude-fable-5", Provider.BEDROCK,
-        max_context_len=200_000, family="claude", alignment_tier="strong")
+        max_context_len=200_000, family="claude", alignment_tier="strong",
+        quirks=_NO_TEMP | _THINKING_BUDGET)
     # -- Amazon Nova (inference-profile ids; Nova family caps output at 10000) --
     BEDROCK_NOVA_MICRO = ModelSpec(             # cheapest text (fast judge candidate)
         "us.amazon.nova-micro-v1:0", Provider.BEDROCK, 0.035, 0.14,
@@ -340,7 +350,10 @@ class LLMModel(Enum):
     #    inference profile invokes on that profile id (Claude/Nova/Llama/Pixtral);
     #    models WITHOUT one invoke on the bare ON_DEMAND id (Gemma/GPT-OSS/Qwen/
     #    GLM/Kimi/DeepSeek/Mistral-Large). max_output_tokens: Nova caps at 10000
-    #    (clamp 5000); Llama/Pixtral/Mistral cap output at 8192 on Bedrock. --
+    #    (clamp 5000); Llama/Pixtral/Mistral cap output at 8192 on Bedrock.
+    #    Prices in this block: UNTRACKED (0.0 — cost records as $0) except
+    #    Nova Premier; fill from the AWS pricing page when cost tracking on
+    #    these rows starts to matter. --
     # -- MULTIMODAL (vision) targets across MORE vendors — the target diversity a
     #    VLM-jailbreak paper wants (image-rendered attacks reach Claude/Nova/Qwen +
     #    now Mistral-Pixtral / Meta-Llama-Vision / Meta-Llama-4 / Gemma). --
@@ -392,7 +405,7 @@ class LLMModel(Enum):
     MISTRAL_7B   = ModelSpec("mistralai/Mistral-7B-Instruct-v0.2",       Provider.LOCAL)
     PHI_3_MINI   = ModelSpec("microsoft/Phi-3-mini-4k-instruct",         Provider.LOCAL)
 
-    # ──────── NU Cluster (vLLM-served) — max_context_len populated ────────
+    # ──────── SLURM cluster (vLLM-served) — max_context_len populated ────────
     LLAMA3_1_8B_CLUSTER = ModelSpec(
         "meta-llama/Llama-3.1-8B-Instruct", Provider.SLURM_CLUSTER,
         max_context_len=131_072)               # Llama-3.1 long-context
@@ -419,7 +432,7 @@ class LLMModel(Enum):
     LLAMA3_2_11B_VISION = ModelSpec(
         "meta-llama/Llama-3.2-11B-Vision-Instruct", Provider.SLURM_CLUSTER,
         family="llama", alignment_tier="strong")
-    INTERNVL3_8B = ModelSpec(   # needs trust_remote_code (set in conf/llm)
+    INTERNVL3_8B = ModelSpec(   # needs trust_remote_code (set in cluster config)
         "OpenGVLab/InternVL3-8B", Provider.SLURM_CLUSTER,
         family="internvl", alignment_tier="mid")
     QWEN3_VL_8B_INSTRUCT = ModelSpec(
@@ -625,10 +638,20 @@ class LLMModel(Enum):
         '-' and '.' to '_'). Raises ValueError with a sample of available
         models on no match.
         """
-        # Try by model_id first
-        for model in cls:
-            if model.model_id == model_str:
-                return model
+        # Try by model_id first. The same id may be registered on several
+        # serving routes (same weights local AND cluster-served) — an
+        # ambiguous string cannot pick a provider, so fail loudly instead of
+        # silently returning whichever row is defined first.
+        matches = [m for m in cls if m.model_id == model_str]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            names = ", ".join(
+                f"LLMModel.{m.name} ({m.provider.value})" for m in matches)
+            raise ValueError(
+                f"Ambiguous model id '{model_str}' — registered on multiple "
+                f"serving routes: {names}. Pass the enum member (or enum "
+                f"name) instead.")
 
         # Try by enum name (case insensitive, '-'/'.' → '_')
         model_str_upper = model_str.upper().replace("-", "_").replace(".", "_")

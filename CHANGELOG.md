@@ -3,6 +3,96 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v5.0.0 — 2026-07-30
+
+Full-system audit release: every serving route audited against the base
+contract; defects fixed, the batch seam made symmetric across the three major
+providers, and a 60-test offline suite added (`tests/`, `uv run pytest`).
+
+**BREAKING:**
+
+- `ClaudeService.batch_chat` and `GoogleService.batch_chat` now auto-route
+  exactly like OpenAI's: jobs under `batch_threshold_usd` (default $1) run
+  CONCURRENT REALTIME (full price, seconds) instead of always queuing on the
+  native batch API. Bulk callers keep 50% batch pricing automatically (big
+  jobs still batch); pass `use_batch_api=True` to force native batch always.
+  The routing seam (`use_batch_api`, `batch_threshold_usd`, estimator) moved
+  to `BaseLLMService` — shared by all three.
+- `LLMModel.from_string` now RAISES ValueError on a model id registered on
+  multiple serving routes (e.g. `meta-llama/Meta-Llama-3-8B-Instruct` = local
+  AND cluster) instead of silently returning the local row; enum names still
+  resolve every row unambiguously.
+- Recorded Gemini output tokens now include THINKING tokens (billed as output
+  by Google but reported separately) — recorded costs on thinking Gemini
+  models go UP; they were silently understated before.
+- `GoogleService` no longer raises on failed/cancelled/expired batch jobs:
+  terminal non-success states return per-item results — partial (already
+  billed) results are collected, missing items become mechanism errors.
+- Bedrock's `BedrockCredentialsError` / `BedrockAccessError` moved into the
+  package exception hierarchy (`InvalidCredentialError` / `FatalModelError`
+  subclasses respectively) so account-fatal handlers catch expired AWS creds.
+- Removed the dead `config=None` constructor parameter from every service,
+  and the never-used `OLLAMA_*` / `DEFAULT_API_BATCH_SIZE` constants.
+- `LocalLMService` prompts now go through `tokenizer.apply_chat_template`
+  when the tokenizer ships one (correct role markers for instruct models;
+  outputs will differ from the old newline-join, which remains the fallback).
+
+**Added:**
+
+- Resumable batch trio on `GoogleService` (`submit_batch_chat` /
+  `batch_chat_status` / `harvest_batch_chat`) — all three major providers now
+  have it; base-class stubs give every other service a clean
+  `NotImplementedError`. Google results are positional ("0", "1", … — its
+  inline batch has no custom_id; keep your own id list).
+- All eleven service classes + `ClusterModelServerManager` exported from the
+  public seam (previously only four services were importable from
+  `llm_utils`).
+- `api_params` pass-through on `ClaudeService` and `SlurmClusterService`
+  (parity with the OpenAI family); temperature quirk gating unified through
+  `_accepts_temperature` on Bedrock and the cluster service.
+- Thinking-headroom handling on `ClaudeService` for always-thinking models
+  (Opus 5 / Fable 5, now marked `THINKING_SHARES_OUTPUT_BUDGET` in the
+  registry) — thought tokens no longer starve the visible-text budget.
+- Offline test suite: 60 tests over routing, cost math (batch discount on all
+  three providers), registry integrity, factory dispatch, usage hook,
+  mechanism-error contract. Registry prices spot-verified against official
+  provider pages 2026-07-30: all 38 checked rows MATCH.
+
+**Fixed:**
+
+- `LocalLMService` crashed at construction on CUDA (`device_map="auto"` +
+  pipeline `device=` conflict); batch-fallback double-generated and
+  double-recorded usage for items that had already completed; images were
+  silently dropped (now warned); HF token read at import time (now at load
+  time, `HF_TOKEN` accepted as alias).
+- Bedrock Claude 5.x registry rows lacked `NO_CUSTOM_TEMPERATURE` — every
+  request to them 400'd; Bedrock retry now uses the shared case-insensitive
+  rate-limit classifier with capped backoff, and 404s raise `FatalModelError`.
+- `ClaudeService`: multi-block responses no longer truncate to the first text
+  block; the batch result stream is retry-wrapped (was the one unwrapped
+  network call); `harvest_batch_chat` no longer re-records usage on repeat
+  harvests in the same process; batch item errors carry the provider's error
+  detail.
+- `GoogleService`: response-count mismatches fill with mechanism errors
+  instead of silently truncating via `zip`; Optional SDK fields guarded.
+- OpenAI/vLLM realtime retry matched any error containing "rate" (e.g.
+  "failed to generate") — now uses the shared classifier;
+  `batch_chat_status`/`harvest_batch_chat` guard compatible endpoints.
+- `SlurmClusterService` leaked one `AsyncOpenAI`+httpx2 client per call
+  (now closed in the event loop).
+- `ClusterModelServerManager`: monitor thread no longer dies permanently on a
+  teardown race (exception-guarded, shutdown-race guard on pool appends); a
+  transient `squeue` failure no longer permanently blackholes a live server;
+  sbatch `logs/` is pre-created (SLURM opens the log files before the script
+  body runs); wall-time clamping compares numerically (lexicographic compare
+  mis-clamped unpadded specs).
+- API keys on Claude/Google read at construction (was import-time snapshot).
+
+Migration notes: latency-sensitive small `batch_chat` jobs on Claude/Google
+get FASTER but bill at full realtime price — pass `use_batch_api=True` to
+keep forcing 50% batch pricing. Callers resolving the ambiguous local/cluster
+Llama-3-8B id by string must switch to the enum member or enum name.
+
 ## v4.0.0 — 2026-07-30
 
 **BREAKING (behavior, not signatures):** `OpenAIService.batch_chat` on the

@@ -44,7 +44,8 @@ class LLMServiceFactory:
         Provider.SLURM_CLUSTER: SlurmClusterService,
     }
     
-    # Cluster server manager (set by Experiment before running tasks)
+    # Cluster server manager (set by the consumer's orchestrator before
+    # creating cluster-model services)
     _server_manager: Optional[object] = None
 
     # Per-model default-params loader (set by the consumer at startup).
@@ -80,7 +81,7 @@ class LLMServiceFactory:
         """
         Register the ClusterModelServerManager.
 
-        Called by Experiment.run_experiment() after starting servers,
+        Called by the consumer's orchestrator after starting servers,
         so factory can auto-fetch endpoint URLs for cluster models.
 
         Args:
@@ -90,12 +91,12 @@ class LLMServiceFactory:
 
     @classmethod
     def clear_server_manager(cls) -> None:
-        """Clear the registered manager (call on Experiment teardown).
+        """Clear the registered manager (call on orchestrator teardown).
 
         The manager lives as class-level singleton state; without an explicit
-        clear, a subsequent Experiment in the same process inherits the
-        previous run's (now shut-down) manager and tasks calling cluster
-        models will fail with stale-reference errors instead of a clean
+        clear, a subsequent run in the same process inherits the previous
+        run's (now shut-down) manager and tasks calling cluster models will
+        fail with stale-reference errors instead of a clean
         ``RuntimeError: no manager registered``.
         """
         cls._server_manager = None

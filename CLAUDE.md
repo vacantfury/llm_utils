@@ -52,6 +52,12 @@ no site-specific hostnames).
 ## Layout
 
 - `src/llm_utils/` — the package (src layout, hatchling build).
+- `tests/` — offline test suite (`uv run pytest`). NO network, NO API keys:
+  provider calls are monkeypatched/faked, services are constructed with a
+  dummy `api_key`. Every release runs it; a change to routing, cost math, the
+  registry, or the mechanism-error contract gets a test in the same commit.
+  Live verification stays a scratchpad smoke script (needs real keys via the
+  consumer's own secret injection), never a committed test.
 - `text_docs/design.md` — founding record + reconciliation plan (three diverged copies
   are being merged; this repo seeded from the most-current trunk).
 - `TODO.md` — gitignored (task text is personal); registered in the owner's task system.

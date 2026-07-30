@@ -3,7 +3,7 @@ LLM utility module for working with various language models.
 """
 
 # Define version information
-__version__ = "4.0.0"
+__version__ = "5.0.0"
 
 # Core components
 from .llm_model import LLMModel, Provider, ModelQuirk
@@ -22,8 +22,23 @@ from .exceptions import (
     CreditsExhaustedError,
 )
 
-# Concrete service implementations
-from .llm_services import OpenAIService, ClaudeService, GoogleService, LocalLMService
+# Concrete service implementations — ALL serving routes are part of the
+# public seam (heavy deps stay lazy: importing these classes needs no
+# torch/boto3; only INSTANTIATING LocalLMService/BedrockService does).
+from .llm_services import (
+    OpenAIService,
+    DeepSeekService,
+    ZAIService,
+    XAIService,
+    MoonshotService,
+    OpenRouterService,
+    ClaudeService,
+    GoogleService,
+    LocalLMService,
+    SlurmClusterService,
+    BedrockService,
+)
+from .cluster_server_manager import ClusterModelServerManager
 
 # Define what's exported
 __all__ = [
@@ -48,11 +63,21 @@ __all__ = [
     'InvalidCredentialError',
     'CreditsExhaustedError',
 
-    # Concrete services
+    # Concrete services (one per serving route)
     'OpenAIService',
+    'DeepSeekService',
+    'ZAIService',
+    'XAIService',
+    'MoonshotService',
+    'OpenRouterService',
     'ClaudeService',
     'GoogleService',
     'LocalLMService',
+    'SlurmClusterService',
+    'BedrockService',
+
+    # Cluster serving lifecycle
+    'ClusterModelServerManager',
 
     # Version
     '__version__'

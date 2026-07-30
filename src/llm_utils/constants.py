@@ -3,13 +3,9 @@ Constants for LLM configurations and endpoints.
 """
 import os
 import stat
-from typing import Final, Optional, TYPE_CHECKING
+from typing import Final, Optional
 
 from dotenv import load_dotenv
-
-# Import LLMModel for type annotations
-if TYPE_CHECKING:
-    from .llm_model import LLMModel
 
 # API keys are read as plain environment variables. They can be exported in the
 # shell, injected by a secret manager, or placed in a gitignored `.env` in the
@@ -65,11 +61,6 @@ ZAI_API_URL: Final[str] = "https://api.z.ai/api/paas/v4"           # direct main
 OPENROUTER_API_URL: Final[str] = "https://openrouter.ai/api/v1"    # US aggregator
 XAI_API_URL: Final[str] = "https://api.x.ai/v1"                    # US jurisdiction
 MOONSHOT_API_URL: Final[str] = "https://api.moonshot.ai/v1"        # direct mainland (.ai = international)
-OLLAMA_BASE_URL: Final[str] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_VERSION_URL: Final[str] = f"{OLLAMA_BASE_URL}/api/version"
-OLLAMA_CHAT_URL: Final[str] = f"{OLLAMA_BASE_URL}/api/chat"
-OLLAMA_GENERATE_URL: Final[str] = f"{OLLAMA_BASE_URL}/api/generate"
-
 DEFAULT_SYSTEM_MESSAGE: Final[str] = "You are a helpful assistant."
 
 
@@ -92,10 +83,6 @@ DEFAULT_SYSTEM_MESSAGE: Final[str] = "You are a helpful assistant."
 # =============================================================================
 # Batch processing settings
 # =============================================================================
-
-# API batch processing (OpenAI, Claude)
-# Note: Currently for documentation purposes. Use when implementing async batch API calls.
-DEFAULT_API_BATCH_SIZE: Final[int] = 300  # Max API requests in a batch
 
 # Local model GPU batch inference (HuggingFace Transformers)
 # Adjust based on your model size and GPU:

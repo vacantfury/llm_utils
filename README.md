@@ -16,14 +16,14 @@ Pin a release tag as a git dependency (recommended — upgrades are a deliberate
 tag bump, so nothing changes under you mid-experiment):
 
 ```bash
-uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v3.1.0"
+uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v5.0.0"
 ```
 
 Heavy serving routes are extras; the core stays API-client-light:
 
 ```bash
-uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v3.1.0"    # torch + transformers
-uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v3.1.0"  # boto3
+uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v5.0.0"    # torch + transformers
+uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v5.0.0"  # boto3
 ```
 
 **Stability contract:** the public seam is what `llm_utils/__init__.py` exports.
@@ -53,14 +53,13 @@ code is untouched.
 
 `batch_chat` takes `(id, messages)` conversations, where each message is a
 `(text, image_or_None)` tuple; it returns `(id, response)` pairs in input
-order. Anthropic and Google route through their native batch endpoints at
-50% of real-time cost. Real OpenAI **auto-routes by estimated job cost**:
-jobs estimated at ≥ `batch_threshold_usd` (default $1) go through OpenAI's
-native Batch API (50% price, queued — 24h window, usually much faster);
-smaller jobs fan out concurrent real-time calls under a semaphore. Override
-with `use_batch_api=True/False` at construction. OpenAI-COMPATIBLE endpoints
-(DeepSeek, Z.AI, xAI, …) have no batch API and always run real-time
-concurrent.
+order. On OpenAI, Anthropic, AND Google, `batch_chat` **auto-routes by
+estimated job cost**: jobs estimated at ≥ `batch_threshold_usd` (default $1)
+go through the provider's native batch API (50% price, queued — usually much
+faster than the 24h window); smaller jobs fan out concurrent real-time calls
+(full price, seconds turnaround). Override with `use_batch_api=True/False` at
+construction. OpenAI-COMPATIBLE endpoints (DeepSeek, Z.AI, xAI, …) have no
+batch API and always run real-time concurrent.
 
 ```python
 conversations = [
@@ -72,11 +71,13 @@ for conv_id, response in results:
     print(conv_id, response)
 ```
 
-On `ClaudeService` and `OpenAIService`, batches are also **resumable across
-processes**: `submit_batch_chat(...)` returns the provider batch id without
-waiting; persist it anywhere, then `harvest_batch_chat(batch_id)` from any
-later invocation (None while still running); `batch_chat_status(batch_id)`
-polls.
+On `OpenAIService`, `ClaudeService`, and `GoogleService`, batches are also
+**resumable across processes**: `submit_batch_chat(...)` returns the provider
+batch id without waiting; persist it anywhere, then
+`harvest_batch_chat(batch_id)` from any later invocation (None while still
+running); `batch_chat_status(batch_id)` polls. Google caveat: its inline
+batch carries no per-item id, so harvested results are positional (`"0"`,
+`"1"`, … in submission order) — keep your own id list from submit time.
 
 ### Token logprobs
 
@@ -93,9 +94,9 @@ for conv_id, text, logprobs in results:
     first_token = logprobs["content"][0] if logprobs else None
 ```
 
-`batch_chat`'s `(id, text)` return shape is unchanged. Services whose
-provider API returns no logprobs (Anthropic, Google) raise
-`NotImplementedError`.
+`batch_chat`'s `(id, text)` return shape is unchanged. Only
+`SlurmClusterService` implements this today; every other service raises
+`NotImplementedError` (Anthropic and Google APIs return no logprobs at all).
 
 ### Structured output
 
@@ -129,10 +130,12 @@ retries, and may return None when the model's output failed validation.
 - **`BaseLLMService`** — the shared interface: `chat` / `achat` / `batch_chat`,
   rate-limit retry with backoff, and per-service usage tracking
   (`get_usage()` reports tokens + cost from the registry's prices).
-- **Concrete services** — `OpenAIService`, `ClaudeService`, `GoogleService`,
-  `LocalLMService` (HuggingFace on CUDA/MPS/CPU), plus Bedrock,
-  OpenAI-compatible endpoints, and SLURM-cluster vLLM serving behind the same
-  interface.
+- **Concrete services** — all eleven serving routes are exported from the
+  seam: `OpenAIService`, `ClaudeService`, `GoogleService`, `BedrockService`,
+  `LocalLMService` (HuggingFace on CUDA/MPS/CPU), `SlurmClusterService` (+
+  `ClusterModelServerManager`), and the OpenAI-compatible endpoint services
+  (`DeepSeekService`, `ZAIService`, `XAIService`, `MoonshotService`,
+  `OpenRouterService`) — one interface everywhere.
 
 ### Error contract
 
@@ -186,7 +189,8 @@ automatically via `python-dotenv`.
 | xAI | `XAI_API_KEY` |
 | Moonshot | `MOONSHOT_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
-| AWS Bedrock | standard AWS credential chain (`AWS_PROFILE`, …) |
+| AWS Bedrock | standard AWS credential chain (`AWS_PROFILE`, `AWS_REGION` / `AWS_DEFAULT_REGION`, or explicit `aws_profile` / `aws_region` kwargs) |
+| HuggingFace (gated models, local + cluster serving) | `HUGGINGFACE_TOKEN` (or `HF_TOKEN`) |
 
 Note on jurisdictions: DeepSeek, Z.AI, and Moonshot are direct mainland-China
 endpoints; OpenRouter is a US aggregator that can route to the same open-weight

@@ -1,14 +1,18 @@
 """
 Base abstract class for LLM services with usage tracking.
 
-All services implement a single public method: ``batch_chat``.
+The core public method every service implements is ``batch_chat``; the base
+also declares the single-prompt conveniences (``chat`` / ``achat``),
+``chat_structured``, ``batch_chat_with_logprobs``, and the resumable batch
+trio (``submit_batch_chat`` / ``batch_chat_status`` / ``harvest_batch_chat``)
+— each implemented per provider where the serving route supports it.
 """
 
 import asyncio
 import random
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Any, Awaitable, Callable, List, Optional, Tuple, TypeVar
 
 from ._logging import get_logger
@@ -34,7 +38,8 @@ _RATE_LIMIT_PATTERNS = (
     "quota exceeded",
     "quota_exceeded",
     "overloaded",
-    "throttle",
+    "throttl",            # AWS ThrottlingException / "throttled" / "throttle"
+    "toomanyrequests",    # AWS TooManyRequestsException (no spaces)
 )
 
 
@@ -144,6 +149,16 @@ def _backoff_seconds(attempt: int, base: float = 2.0, max_wait: float = 60.0) ->
     return min(base ** attempt + random.random() * 2, max_wait)
 
 
+# --- Native-batch auto-routing heuristics ----------------------------------
+# Shared by every service with a native batch API (OpenAI, Anthropic, Google).
+# Deliberately crude: routing only needs the cost estimate right within
+# ~2-3x. Tunables surface as constructor params (a library's config seam);
+# tuning the defaults against real ledger data is filed in the repo TODO.
+_DEFAULT_BATCH_THRESHOLD_USD = 1.0   # est. job cost at/above which auto mode batches
+_EST_CHARS_PER_TOKEN = 4             # rough text-token estimate
+_EST_IMAGE_TOKENS = 1000             # flat per-image token estimate
+
+
 @dataclass
 class UsageStats:
     """Tracks inference count, token usage, and cost."""
@@ -205,11 +220,21 @@ class BaseLLMService(ABC):
         max_retries: int = 5,
         batch_poll_interval: int = 30,
         batch_timeout: int = 3600,
+        use_batch_api: Optional[bool] = None,
+        batch_threshold_usd: Optional[float] = None,
     ):
         self.max_concurrency = max_concurrency
         self.max_retries = max_retries
         self.batch_poll_interval = batch_poll_interval
         self.batch_timeout = batch_timeout
+        # Native-batch routing (services with a native batch API only):
+        #   None  → auto: batch iff estimated job cost ≥ batch_threshold_usd
+        #   True  → always use the native batch API
+        #   False → never (always the concurrent realtime path)
+        self.use_batch_api = use_batch_api
+        self.batch_threshold_usd = (
+            _DEFAULT_BATCH_THRESHOLD_USD
+            if batch_threshold_usd is None else batch_threshold_usd)
         self.algorithm_usage = UsageStats()
         self.total_usage = UsageStats()
         # Free-form accounting tag for the usage hook (set via
@@ -352,6 +377,56 @@ class BaseLLMService(ABC):
                 raise
         raise RuntimeError(f"{label}: exhausted retries")
 
+    # ------------------------------------------------------------------
+    # Native-batch auto-routing (shared by OpenAI / Anthropic / Google).
+    # ------------------------------------------------------------------
+
+    def _supports_native_batch(self) -> bool:
+        """Whether this service can reach a native batch API. Overridden by
+        the services that have one; the default keeps every other route on
+        the realtime path."""
+        return False
+
+    def _estimate_cost_usd(
+        self,
+        conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
+        max_tokens: int,
+    ) -> float:
+        """Crude worst-case job cost over seam-format conversations: chars/4
+        (+ flat per image) input tokens, full ``max_tokens`` output per
+        request. Only needs to be right within ~2-3x to route correctly."""
+        in_tokens = 0
+        for _cid, messages in conversations:
+            for text, image in messages:
+                in_tokens += len(text or "") // _EST_CHARS_PER_TOKEN
+                if image is not None:
+                    images = image if isinstance(image, list) else [image]
+                    in_tokens += _EST_IMAGE_TOKENS * sum(
+                        1 for img in images if img is not None)
+        out_tokens = len(conversations) * max_tokens
+        return (
+            in_tokens * self.model.input_price
+            + out_tokens * self.model.output_price
+        ) / 1_000_000
+
+    def _route_to_native_batch(
+        self,
+        conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
+        max_tokens: int,
+    ) -> bool:
+        """Decide realtime vs native batch for this job (see ``use_batch_api``)."""
+        if not self._supports_native_batch():
+            return False
+        if self.use_batch_api is not None:
+            return self.use_batch_api
+        est = self._estimate_cost_usd(conversations, max_tokens)
+        to_batch = est >= self.batch_threshold_usd
+        logger.info(
+            f"auto-route: est. job cost ${est:.2f} "
+            f"{'≥' if to_batch else '<'} ${self.batch_threshold_usd:.2f} → "
+            f"{'native batch (50% price)' if to_batch else 'realtime'}")
+        return to_batch
+
     @abstractmethod
     def batch_chat(
         self,
@@ -394,14 +469,48 @@ class BaseLLMService(ABC):
         alternatives), or None when the call failed (mechanism error) or the
         server returned no logprobs.
 
-        Implemented only where the serving route exposes logprobs — the
-        OpenAI-compatible / vLLM cluster path. Anthropic and Google APIs do
-        not return logprobs at all, so their services keep this default
-        (a permanent gap, not a TODO).
+        Implemented only on ``SlurmClusterService`` (vLLM's OpenAI-compatible
+        endpoint returns logprobs when asked). Anthropic and Google APIs do
+        not return logprobs at all, so their services keep this default (a
+        permanent gap, not a TODO); the OpenAI/compatible API services simply
+        haven't needed it yet.
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not expose token logprobs "
-            "(only the OpenAI-compatible / vLLM serving routes do)"
+            "(only the vLLM cluster serving route implements this today)"
+        )
+
+    # ------------------------------------------------------------------
+    # Resumable batch trio — implemented by services with a native batch
+    # API (OpenAI, Anthropic, Google). Declared here so a duck-typed caller
+    # gets a clean NotImplementedError instead of an AttributeError.
+    # ------------------------------------------------------------------
+
+    def submit_batch_chat(
+        self,
+        conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
+        system_message: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        """Submit a native batch WITHOUT waiting; returns the provider batch
+        id. Persist the id anywhere and harvest from a later process."""
+        raise NotImplementedError(
+            f"{type(self).__name__} has no native batch API "
+            "(resumable batches exist on OpenAI, Anthropic, and Google services)"
+        )
+
+    def batch_chat_status(self, batch_id: str) -> str:
+        """The provider's status string for a previously submitted batch."""
+        raise NotImplementedError(
+            f"{type(self).__name__} has no native batch API"
+        )
+
+    def harvest_batch_chat(
+        self, batch_id: str, *, is_test: bool = False,
+    ) -> Optional[List[Tuple[str, str]]]:
+        """Results of a previously submitted batch, or None while running."""
+        raise NotImplementedError(
+            f"{type(self).__name__} has no native batch API"
         )
 
     # ------------------------------------------------------------------
@@ -425,6 +534,8 @@ class BaseLLMService(ABC):
             is_test=is_test,
             **kwargs,
         )
+        if not out:
+            return make_mechanism_error("batch_chat returned no results")
         return out[0][1]
 
     async def achat(

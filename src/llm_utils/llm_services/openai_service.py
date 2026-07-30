@@ -14,27 +14,20 @@ import asyncio
 import io
 import json
 import os
-import random
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import AsyncOpenAI, OpenAI
 
-from ..base_llm_service import BaseLLMService, make_mechanism_error
+from ..base_llm_service import (
+    BaseLLMService, _backoff_seconds, is_rate_limit_error, make_mechanism_error,
+)
 from ..llm_model import LLMModel, ModelQuirk
 from .. import constants as _constants  # noqa: F401  (side effect: load_dotenv)
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger
 
 logger = get_logger(__name__)
-
-# --- Native-batch auto-routing heuristics ----------------------------------
-# Deliberately crude: routing only needs the cost estimate right within
-# ~2-3x. Tunables surface as constructor params (a library's config seam);
-# tuning the defaults against real ledger data is filed in the repo TODO.
-_DEFAULT_BATCH_THRESHOLD_USD = 1.0   # est. job cost at/above which auto mode batches
-_EST_CHARS_PER_TOKEN = 4             # rough text-token estimate
-_EST_IMAGE_TOKENS = 1000             # flat per-image token estimate
 
 # Batch API terminal statuses. "expired" still carries partial results
 # (finished items are returned and billed); "failed" = wholesale validation
@@ -55,12 +48,18 @@ class OpenAIService(BaseLLMService):
     BASE_URL: Optional[str] = None            # None → default OpenAI endpoint
     SERVICE_NAME: str = "OpenAI"              # for logs / error messages
 
-    def __init__(self, model: LLMModel, config=None, **kwargs):
+    def __init__(self, model: LLMModel, **kwargs):
         super().__init__(
             max_concurrency=kwargs.pop("max_concurrency", 20),
             max_retries=kwargs.pop("max_retries", 5),
             batch_poll_interval=kwargs.pop("batch_poll_interval", 30),
             batch_timeout=kwargs.pop("batch_timeout", 3600),
+            # Native Batch API routing (real OpenAI endpoint only):
+            #   None → auto (cost threshold) · True → always batch (NB: `chat`
+            #   funnels through `batch_chat`, so forcing True queues single
+            #   calls too) · False → never batch. See BaseLLMService.
+            use_batch_api=kwargs.pop("use_batch_api", None),
+            batch_threshold_usd=kwargs.pop("batch_threshold_usd", None),
         )
         self.model = model
         self.api_key = kwargs.get("api_key") or os.getenv(self.API_KEY_ENV)
@@ -76,14 +75,6 @@ class OpenAIService(BaseLLMService):
         # on top of these.
         self.api_params: Dict[str, Any] = kwargs.get("api_params") or {}
 
-        # Native Batch API routing (real OpenAI endpoint only):
-        #   None  → auto: batch iff estimated job cost ≥ batch_threshold_usd
-        #   True  → always batch (NB: `chat` funnels through `batch_chat`,
-        #           so forcing True queues single calls too)
-        #   False → never batch (the concurrent realtime path)
-        self.use_batch_api: Optional[bool] = kwargs.get("use_batch_api", None)
-        self.batch_threshold_usd: float = kwargs.get(
-            "batch_threshold_usd", _DEFAULT_BATCH_THRESHOLD_USD)
         if self.use_batch_api and self.BASE_URL is not None:
             logger.warning(
                 f"{self.SERVICE_NAME}: use_batch_api=True ignored — "
@@ -195,8 +186,8 @@ class OpenAIService(BaseLLMService):
                     # retrying every cell. Checked BEFORE the rate-limit branch
                     # because OpenAI returns `insufficient_quota` as a 429.
                     self._raise_if_account_fatal(e)
-                    if ("429" in err or "rate" in err.lower()) and attempt < self.max_retries:
-                        wait = (2 ** attempt) + random.random()
+                    if is_rate_limit_error(e) and attempt < self.max_retries:
+                        wait = _backoff_seconds(attempt)
                         logger.warning(
                             f"Rate limit hit, retry {attempt + 1}/{self.max_retries} "
                             f"in {wait:.1f}s"
@@ -217,6 +208,11 @@ class OpenAIService(BaseLLMService):
     # nothing touches disk — and the batch's files are deleted after harvest.
     # ------------------------------------------------------------------
 
+    def _supports_native_batch(self) -> bool:
+        # Compatible endpoints (DeepSeek, Z.AI, xAI, …) don't implement
+        # /v1/batches — only the real OpenAI endpoint batches.
+        return self.BASE_URL is None
+
     @property
     def sync_client(self) -> OpenAI:
         if self._sync_client is None:
@@ -225,46 +221,6 @@ class OpenAIService(BaseLLMService):
                 client_kwargs["base_url"] = self.BASE_URL
             self._sync_client = OpenAI(**client_kwargs)
         return self._sync_client
-
-    def _estimate_cost_usd(
-        self, prepared: List[Tuple[str, List[Dict]]], max_tokens: int,
-    ) -> float:
-        """Crude worst-case job cost: chars/4 (+ flat per image) input tokens,
-        full ``max_tokens`` output per request. Only needs to be right within
-        ~2-3x to route correctly."""
-        in_tokens = 0
-        for _cid, messages in prepared:
-            for msg in messages:
-                content = msg.get("content")
-                if isinstance(content, str):
-                    in_tokens += len(content) // _EST_CHARS_PER_TOKEN
-                elif isinstance(content, list):
-                    for part in content:
-                        if part.get("type") == "text":
-                            in_tokens += len(part.get("text", "")) // _EST_CHARS_PER_TOKEN
-                        else:
-                            in_tokens += _EST_IMAGE_TOKENS
-        out_tokens = len(prepared) * max_tokens
-        return (
-            in_tokens * self.model.input_price
-            + out_tokens * self.model.output_price
-        ) / 1_000_000
-
-    def _route_to_native_batch(
-        self, prepared: List[Tuple[str, List[Dict]]], max_tokens: int,
-    ) -> bool:
-        """Decide realtime vs native batch for this job (see ``use_batch_api``)."""
-        if self.BASE_URL is not None:
-            return False  # compatible endpoints don't implement /v1/batches
-        if self.use_batch_api is not None:
-            return self.use_batch_api
-        est = self._estimate_cost_usd(prepared, max_tokens)
-        to_batch = est >= self.batch_threshold_usd
-        logger.info(
-            f"auto-route: est. job cost ${est:.2f} "
-            f"{'≥' if to_batch else '<'} ${self.batch_threshold_usd:.2f} → "
-            f"{'native batch (50% price)' if to_batch else 'realtime'}")
-        return to_batch
 
     def _submit_batch(
         self,
@@ -414,7 +370,7 @@ class OpenAIService(BaseLLMService):
             for cid, msgs in conversations
         ]
 
-        if self._route_to_native_batch(prepared, max_tokens):
+        if self._route_to_native_batch(conversations, max_tokens):
             batch = self._submit_batch(prepared, temperature, max_tokens, extra)
             batch = self._poll_until_done(batch)
             results_map = self._collect_results(batch, is_test)
@@ -450,7 +406,11 @@ class OpenAIService(BaseLLMService):
     ) -> Any:
         """One prompt → one `output_schema` instance via `chat.completions.parse`
         (OpenAI structured outputs). Raises on API failure after retries; may
-        return None when the model refused or produced no parsable output."""
+        return None when the model refused or produced no parsable output.
+
+        On OpenAI-COMPATIBLE endpoints support varies by provider: xAI and
+        some OpenRouter models accept strict structured outputs, DeepSeek and
+        Moonshot do not (their server returns a 400, which raises here)."""
         messages = self._format_conversation([(prompt, None)], system_message)
         params = self._build_api_params(
             messages,
@@ -515,6 +475,10 @@ class OpenAIService(BaseLLMService):
     def batch_chat_status(self, batch_id: str) -> str:
         """The provider's batch status ("validating", "in_progress",
         "completed", "failed", "expired", …)."""
+        if self.BASE_URL is not None:
+            raise NotImplementedError(
+                f"{self.SERVICE_NAME}: /v1/batches exists only on the real "
+                f"OpenAI endpoint")
         batch = self._retry_rate_limit_sync(
             lambda: self.sync_client.batches.retrieve(batch_id),
             label=f"{self.SERVICE_NAME} batches.retrieve ({batch_id})",
@@ -529,6 +493,10 @@ class OpenAIService(BaseLLMService):
         Failed/expired entries come back as mechanism-error strings (same
         contract as `batch_chat`); usage/cost is recorded at batch price for
         succeeded entries. A wholesale-failed batch returns []."""
+        if self.BASE_URL is not None:
+            raise NotImplementedError(
+                f"{self.SERVICE_NAME}: /v1/batches exists only on the real "
+                f"OpenAI endpoint")
         batch = self._retry_rate_limit_sync(
             lambda: self.sync_client.batches.retrieve(batch_id),
             label=f"{self.SERVICE_NAME} batches.retrieve ({batch_id})",
