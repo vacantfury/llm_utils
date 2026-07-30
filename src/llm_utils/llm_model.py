@@ -59,6 +59,37 @@ class Provider(str, Enum):
     LOCAL = "local"
     SLURM_CLUSTER = "slurm_cluster"
 
+    @property
+    def jurisdiction(self) -> str:
+        """Where this route's endpoint processes data: ``"us"`` ·
+        ``"prc"`` (mainland China) · ``"self"`` (our own hardware — no
+        third party sees the data).
+
+        A transport FACT about the endpoint, not a policy: this package never
+        decides what may be sent where. Consumers with a data-routing policy
+        read this (with ``LLMModel.route_twins`` / ``us_route`` below) to pick
+        a route for a given payload.
+        """
+        return _PROVIDER_JURISDICTION[self]
+
+
+# Endpoint jurisdiction per provider. PRC entries are the DIRECT mainland
+# endpoints; the same open weights served by OPENROUTER / BEDROCK are
+# US-jurisdiction, which is what makes the dual-route registry rows useful.
+_PROVIDER_JURISDICTION = {
+    Provider.OPENAI: "us",
+    Provider.ANTHROPIC: "us",
+    Provider.GOOGLE: "us",
+    Provider.XAI: "us",
+    Provider.OPENROUTER: "us",
+    Provider.BEDROCK: "us",
+    Provider.DEEPSEEK: "prc",
+    Provider.ZAI: "prc",
+    Provider.MOONSHOT: "prc",
+    Provider.LOCAL: "self",
+    Provider.SLURM_CLUSTER: "self",
+}
+
 
 class ModelQuirk(str, Enum):
     """API-side behavior flags. A model carries a frozenset of these.
@@ -97,6 +128,14 @@ class ModelSpec:
     # `alignment_tier` is a coarse safety-alignment label (strong/mid/weak).
     family: Optional[str] = None
     alignment_tier: Optional[str] = None
+    # Identity of the underlying MODEL, for models reachable on more than one
+    # serving route. Rows sharing a `weights` value are the same model served
+    # by different endpoints — GLM-5.2 direct from Z.AI (mainland China), via
+    # OpenRouter (US), or self-served on the cluster; Claude Sonnet 5 direct
+    # from Anthropic or via Bedrock. Set it to the vendor's canonical model
+    # name. None = exactly one registered route. Consumed by `route_twins()` /
+    # `us_route()` / `self_route()`.
+    weights: Optional[str] = None
     # Chat template name → src/llm_utils/chat_templates/<name>.jinja, passed to
     # vLLM as --chat-template. None means "use the tokenizer's baked-in template"
     # (correct for modern chat-tuned checkpoints; their tokenizer.json ships one).
@@ -182,7 +221,7 @@ class LLMModel(Enum):
     CLAUDE_SONNET_4_5 = ModelSpec("claude-sonnet-4-5-20250929", Provider.ANTHROPIC, 3.00, 15.00)
     CLAUDE_SONNET_4_6 = ModelSpec("claude-sonnet-4-6",          Provider.ANTHROPIC, 3.00, 15.00)
     CLAUDE_SONNET_5   = ModelSpec("claude-sonnet-5",            Provider.ANTHROPIC, 3.00, 15.00,  # intro $2/$10 through 2026-08-31
-        max_context_len=1_000_000, quirks=_NO_TEMP)
+        max_context_len=1_000_000, quirks=_NO_TEMP, weights="claude-sonnet-5")
     # NOTE (2026-07-30, per the Anthropic pricing page): Opus 4, Opus 4.1 and
     # Sonnet 4 are deprecated/retired on the DIRECT API (still served via
     # Bedrock / Google Cloud). Rows kept for reference; expect direct calls
@@ -193,15 +232,15 @@ class LLMModel(Enum):
     CLAUDE_OPUS_4_5 = ModelSpec("claude-opus-4-5-20251101", Provider.ANTHROPIC, 5.00,  25.00)
     CLAUDE_OPUS_4_6 = ModelSpec("claude-opus-4-6",          Provider.ANTHROPIC, 5.00,  25.00)
     CLAUDE_OPUS_4_7 = ModelSpec("claude-opus-4-7",          Provider.ANTHROPIC, 5.00,  25.00, quirks=_NO_TEMP)
-    CLAUDE_OPUS_4_8 = ModelSpec("claude-opus-4-8",          Provider.ANTHROPIC, 5.00,  25.00, quirks=_NO_TEMP)
+    CLAUDE_OPUS_4_8 = ModelSpec("claude-opus-4-8",          Provider.ANTHROPIC, 5.00,  25.00, quirks=_NO_TEMP, weights="claude-opus-4-8")
     CLAUDE_OPUS_5   = ModelSpec("claude-opus-5",            Provider.ANTHROPIC, 5.00,  25.00,
         max_context_len=1_000_000, quirks=_NO_TEMP | _THINKING_BUDGET)  # thinking ON by default (unlike 4.7/4.8)
     # Frontier tier. Always-on thinking; requires 30-day data retention (a
     # zero-data-retention org gets a 400 on every request).
     CLAUDE_FABLE_5  = ModelSpec("claude-fable-5",           Provider.ANTHROPIC, 10.00, 50.00,
-        max_context_len=1_000_000, quirks=_NO_TEMP | _THINKING_BUDGET)
+        max_context_len=1_000_000, quirks=_NO_TEMP | _THINKING_BUDGET, weights="claude-fable-5")
     # Haiku
-    CLAUDE_HAIKU_4_5 = ModelSpec("claude-haiku-4-5-20251001", Provider.ANTHROPIC, 1.00, 5.00)
+    CLAUDE_HAIKU_4_5 = ModelSpec("claude-haiku-4-5-20251001", Provider.ANTHROPIC, 1.00, 5.00, weights="claude-haiku-4-5")
 
     # ──────── Google ────────
     # gemini-2.0-flash + gemini-2.0-flash-lite REMOVED 2026-07-24 (shut down
@@ -219,12 +258,12 @@ class LLMModel(Enum):
     GEMINI_3_6_FLASH               = ModelSpec("gemini-3.6-flash",                Provider.GOOGLE, 1.50,  7.50, quirks=_THINKING_BUDGET)   # current flash flagship
 
     # ──────── DeepSeek (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
-    DEEPSEEK_V4_FLASH = ModelSpec("deepseek-v4-flash", Provider.DEEPSEEK, 0.14,  0.28, family="deepseek")
-    DEEPSEEK_V4_PRO   = ModelSpec("deepseek-v4-pro",   Provider.DEEPSEEK, 0.435, 0.87, family="deepseek")
+    DEEPSEEK_V4_FLASH = ModelSpec("deepseek-v4-flash", Provider.DEEPSEEK, 0.14,  0.28, family="deepseek", weights="deepseek-v4-flash")
+    DEEPSEEK_V4_PRO   = ModelSpec("deepseek-v4-pro",   Provider.DEEPSEEK, 0.435, 0.87, family="deepseek", weights="deepseek-v4-pro")
 
     # ──────── Z.AI / GLM (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
-    GLM_5_2        = ModelSpec("glm-5.2",        Provider.ZAI, 1.40, 4.40, family="glm")   # current flagship (added 2026-07-12)
-    GLM_5          = ModelSpec("glm-5",          Provider.ZAI, 1.00, 3.20, family="glm")
+    GLM_5_2        = ModelSpec("glm-5.2",        Provider.ZAI, 1.40, 4.40, family="glm", weights="glm-5.2")   # current flagship (added 2026-07-12)
+    GLM_5          = ModelSpec("glm-5",          Provider.ZAI, 1.00, 3.20, family="glm", weights="glm-5")
     GLM_5_TURBO    = ModelSpec("glm-5-turbo",    Provider.ZAI, 1.20, 4.00, family="glm")
     GLM_5V_TURBO   = ModelSpec("glm-5v-turbo",   Provider.ZAI, 1.20, 4.00, family="glm")   # vision
     GLM_4_7        = ModelSpec("glm-4.7",        Provider.ZAI, 0.60, 2.20, family="glm")
@@ -257,7 +296,7 @@ class LLMModel(Enum):
         # starves the visible reply (verified empty at max_tokens=64) — the
         # default.yaml budget (16384) is a normal budget and is correct here.
         "kimi-k3", Provider.MOONSHOT, 3.00, 15.00,
-        max_context_len=1_048_576, family="kimi",
+        max_context_len=1_048_576, family="kimi", weights="kimi-k3",
         quirks=frozenset({ModelQuirk.NO_CUSTOM_TEMPERATURE}))
     KIMI_K2_7_CODE = ModelSpec(
         "kimi-k2.7-code", Provider.MOONSHOT, 0.95, 4.00,
@@ -267,7 +306,7 @@ class LLMModel(Enum):
         max_context_len=262_144, family="kimi")
     KIMI_K2_6 = ModelSpec(
         "kimi-k2.6", Provider.MOONSHOT, 0.95, 4.00,
-        max_context_len=262_144, family="kimi")
+        max_context_len=262_144, family="kimi", weights="kimi-k2.6")
 
     # ──────── OpenRouter (US aggregator over hosted open weights) ────────
     # US-jurisdiction route to open-weight models, incl. Chinese-origin
@@ -275,12 +314,12 @@ class LLMModel(Enum):
     # account, requests reach only non-retaining hosts. Prices = cheapest-host
     # list at registration; ZDR routing may pick a pricier host. One row per
     # family flagship; add more ids as needed.
-    OR_DEEPSEEK_V4_FLASH = ModelSpec("deepseek/deepseek-v4-flash", Provider.OPENROUTER, 0.09,  0.18, family="deepseek")
-    OR_DEEPSEEK_V4_PRO   = ModelSpec("deepseek/deepseek-v4-pro",   Provider.OPENROUTER, 0.435, 0.87, family="deepseek")
-    OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 0.93,  3.00, family="glm")
+    OR_DEEPSEEK_V4_FLASH = ModelSpec("deepseek/deepseek-v4-flash", Provider.OPENROUTER, 0.09,  0.18, family="deepseek", weights="deepseek-v4-flash")
+    OR_DEEPSEEK_V4_PRO   = ModelSpec("deepseek/deepseek-v4-pro",   Provider.OPENROUTER, 0.435, 0.87, family="deepseek", weights="deepseek-v4-pro")
+    OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 0.93,  3.00, family="glm", weights="glm-5.2")
     OR_QWEN_3_7_MAX      = ModelSpec("qwen/qwen3.7-max",           Provider.OPENROUTER, 1.25,  3.75, family="qwen")
-    OR_KIMI_K2_6         = ModelSpec("moonshotai/kimi-k2.6",       Provider.OPENROUTER, 0.55,  3.20, family="kimi")
-    OR_KIMI_K3           = ModelSpec("moonshotai/kimi-k3",         Provider.OPENROUTER, 3.00, 15.00, family="kimi", quirks=_NO_TEMP)
+    OR_KIMI_K2_6         = ModelSpec("moonshotai/kimi-k2.6",       Provider.OPENROUTER, 0.55,  3.20, family="kimi", weights="kimi-k2.6")
+    OR_KIMI_K3           = ModelSpec("moonshotai/kimi-k3",         Provider.OPENROUTER, 3.00, 15.00, family="kimi", quirks=_NO_TEMP, weights="kimi-k3")
     OR_MINIMAX_M3        = ModelSpec("minimax/minimax-m3",         Provider.OPENROUTER, 0.30,  1.20, family="minimax")
 
     # ──────── AWS Bedrock (US-hosted us-east-1; auth via the standard AWS
@@ -297,21 +336,22 @@ class LLMModel(Enum):
     # -- Claude (inference-profile ids; prices = Anthropic list, match on Bedrock) --
     BEDROCK_CLAUDE_HAIKU_4_5 = ModelSpec(
         "us.anthropic.claude-haiku-4-5-20251001-v1:0", Provider.BEDROCK, 1.00, 5.00,
-        max_context_len=200_000, family="claude", alignment_tier="strong")
+        max_context_len=200_000, family="claude", alignment_tier="strong",
+        weights="claude-haiku-4-5")
     # Same NO_CUSTOM_TEMPERATURE quirk as the direct-API twins (Sonnet 5 /
     # Opus 4.8 / Fable 5 reject a custom temperature on Bedrock too).
     BEDROCK_CLAUDE_SONNET_5 = ModelSpec(
         "us.anthropic.claude-sonnet-5", Provider.BEDROCK, 3.00, 15.00,  # promo $2/$10 through 2026-08-31
         max_context_len=200_000, family="claude", alignment_tier="strong",
-        quirks=_NO_TEMP)
+        quirks=_NO_TEMP, weights="claude-sonnet-5")
     BEDROCK_CLAUDE_OPUS_4_8 = ModelSpec(        # flagship-tier target/judge
         "us.anthropic.claude-opus-4-8", Provider.BEDROCK, 5.00, 25.00,
         max_context_len=200_000, family="claude", alignment_tier="strong",
-        quirks=_NO_TEMP)
+        quirks=_NO_TEMP, weights="claude-opus-4-8")
     BEDROCK_CLAUDE_FABLE_5 = ModelSpec(         # newest flagship; list price unpublished → UNTRACKED
         "us.anthropic.claude-fable-5", Provider.BEDROCK,
         max_context_len=200_000, family="claude", alignment_tier="strong",
-        quirks=_NO_TEMP | _THINKING_BUDGET)
+        quirks=_NO_TEMP | _THINKING_BUDGET, weights="claude-fable-5")
     # -- Amazon Nova (inference-profile ids; Nova family caps output at 10000) --
     BEDROCK_NOVA_MICRO = ModelSpec(             # cheapest text (fast judge candidate)
         "us.amazon.nova-micro-v1:0", Provider.BEDROCK, 0.035, 0.14,
@@ -329,13 +369,13 @@ class LLMModel(Enum):
         family="qwen", alignment_tier="mid")
     BEDROCK_DEEPSEEK_V3_2 = ModelSpec(          # ON_DEMAND permissive capability/judge
         "deepseek.v3.2", Provider.BEDROCK,
-        family="deepseek", alignment_tier="weak")
+        family="deepseek", alignment_tier="weak", weights="deepseek-v3.2")
     BEDROCK_GPT_OSS_120B = ModelSpec(           # OpenAI open-weight (120B)
         "openai.gpt-oss-120b-1:0", Provider.BEDROCK,
         max_context_len=128_000, family="gpt-oss")
     BEDROCK_GLM_5 = ModelSpec(                  # Z.AI GLM-5 (US-hosted here)
         "zai.glm-5", Provider.BEDROCK,
-        family="glm", alignment_tier="mid")
+        family="glm", alignment_tier="mid", weights="glm-5")
     BEDROCK_KIMI_K2_5 = ModelSpec(              # Moonshot Kimi K2.5 (US-hosted here)
         "moonshotai.kimi-k2.5", Provider.BEDROCK,
         max_context_len=262_144, family="kimi")
@@ -554,7 +594,7 @@ class LLMModel(Enum):
         # 671B MoE, NATIVE fp8; permissive + published ASR-judge precedent (2603.17368).
         # Sparse attention (DSA) -> vLLM serve-smoke required first.
         "deepseek-ai/DeepSeek-V3.2-Exp", Provider.SLURM_CLUSTER,
-        family="deepseek", max_context_len=163_840)
+        family="deepseek", max_context_len=163_840, weights="deepseek-v3.2")
     KIMI_K2_INSTRUCT = ModelSpec(
         # 1T/32B-active MoE, block-fp8; lowest documented general-harm refusal ->
         # permissive-ceiling judge. Needs a full high-memory GPU node (fp8 ~1 TB).
@@ -626,9 +666,73 @@ class LLMModel(Enum):
         """Coarse safety-alignment label ('strong'/'mid'/'weak'), or None."""
         return self.value.alignment_tier
 
+    @property
+    def weights(self) -> Optional[str]:
+        """Identity of the underlying weights when this model is reachable on
+        more than one serving route; None for single-route (closed) models."""
+        return self.value.weights
+
+    @property
+    def jurisdiction(self) -> str:
+        """Where THIS route processes data: 'us' / 'prc' / 'self'."""
+        return self.provider.jurisdiction
+
     def has_quirk(self, q: ModelQuirk) -> bool:
         """Whether this model has an API-side behavior quirk."""
         return q in self.value.quirks
+
+    # ------------------------------------------------------------------
+    # Multi-route lookup — the same open weights on different endpoints.
+    # Transport facts only; the DECISION of which route a payload may use is
+    # the consumer's policy, never this package's.
+    # ------------------------------------------------------------------
+
+    def route_twins(self) -> tuple:
+        """Every OTHER registry row serving the same weights, in registry
+        order. Empty for single-route models.
+
+        Example: ``LLMModel.GLM_5_2.route_twins()`` → the OpenRouter row
+        (US-jurisdiction host of the same weights).
+        """
+        if not self.weights:
+            return ()
+        return tuple(
+            m for m in type(self)
+            if m is not self and m.weights == self.weights
+        )
+
+    def routes(self) -> tuple:
+        """This row plus all its route twins — every way to reach these
+        weights, in registry order."""
+        if not self.weights:
+            return (self,)
+        return tuple(m for m in type(self) if m.weights == self.weights)
+
+    def us_route(self) -> Optional["LLMModel"]:
+        """The US-jurisdiction route to these weights, or None if there is
+        none registered. Returns self when this route is already US.
+
+        Prefers a hosted US endpoint (OpenRouter / Bedrock) over nothing; a
+        self-served route (local / cluster) is reported by ``self_route()``
+        instead, since "no third party at all" is a different guarantee than
+        "a US third party".
+        """
+        if self.jurisdiction == "us":
+            return self
+        for m in self.route_twins():
+            if m.jurisdiction == "us":
+                return m
+        return None
+
+    def self_route(self) -> Optional["LLMModel"]:
+        """The self-hosted route to these weights (local / SLURM cluster), or
+        None if not registered. Returns self when already self-hosted."""
+        if self.jurisdiction == "self":
+            return self
+        for m in self.route_twins():
+            if m.jurisdiction == "self":
+                return m
+        return None
 
     @classmethod
     def from_string(cls, model_str: str) -> "LLMModel":

@@ -98,6 +98,39 @@ for conv_id, text, logprobs in results:
 `SlurmClusterService` implements this today; every other service raises
 `NotImplementedError` (Anthropic and Google APIs return no logprobs at all).
 
+### One model, several routes
+
+Many open-weight models are reachable through more than one endpoint — a
+Chinese model can be called on its vendor's own (mainland-China) API, through
+OpenRouter (US-hosted), or self-served on your own hardware; Claude can be
+called directly or via Bedrock. Each route is its own registry row, and the
+rows are linked so you can move between them without hardcoding ids:
+
+```python
+LLMModel.GLM_5_2.jurisdiction        # "prc" — where THIS route processes data
+LLMModel.GLM_5_2.route_twins()       # (LLMModel.OR_GLM_5_2,)
+LLMModel.GLM_5_2.us_route()          # LLMModel.OR_GLM_5_2  (same weights, US host)
+LLMModel.GLM_5_2.self_route()        # None, or the local/cluster row if registered
+LLMModel.GPT_5.route_twins()         # () — single-route model
+```
+
+`jurisdiction` is `"us"` / `"prc"` / `"self"` (self = your own hardware, no
+third party). These are transport **facts** about endpoints — the package
+never decides what may be sent where. A consumer with a data-routing policy
+reads them, e.g. "bulk public-data evals may use the cheap direct endpoint;
+anything sensitive takes `us_route()`":
+
+```python
+model = LLMModel.GLM_5_2
+if payload_is_sensitive:
+    model = model.us_route() or fallback_model
+service = LLMServiceFactory.create(model)
+```
+
+Prices differ per route (OpenRouter's aggregated hosts are often cheaper than
+the vendor's own API; self-served rows are $0), so `get_usage()` costs stay
+correct whichever route you pick.
+
 ### Structured output
 
 `chat_structured` returns a validated pydantic instance via the provider's
