@@ -90,6 +90,21 @@ _PROVIDER_JURISDICTION = {
     Provider.SLURM_CLUSTER: "self",
 }
 
+# Tie-break when a model has SEVERAL US-jurisdiction routes (e.g. GLM-5 is on
+# both OpenRouter and Bedrock): `us_route()` returns the first match in this
+# order. Ranked by how universally usable the route is, NOT by price —
+# OpenRouter needs one API key, while Bedrock needs an AWS account with the
+# model enabled, so an OpenRouter row is the safer default. A consumer that
+# wants a specific host filters `routes()` itself.
+_US_ROUTE_PREFERENCE = (
+    Provider.OPENROUTER,
+    Provider.OPENAI,
+    Provider.ANTHROPIC,
+    Provider.GOOGLE,
+    Provider.XAI,
+    Provider.BEDROCK,
+)
+
 
 class ModelQuirk(str, Enum):
     """API-side behavior flags. A model carries a frozenset of these.
@@ -264,12 +279,12 @@ class LLMModel(Enum):
     # ──────── Z.AI / GLM (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
     GLM_5_2        = ModelSpec("glm-5.2",        Provider.ZAI, 1.40, 4.40, family="glm", weights="glm-5.2")   # current flagship (added 2026-07-12)
     GLM_5          = ModelSpec("glm-5",          Provider.ZAI, 1.00, 3.20, family="glm", weights="glm-5")
-    GLM_5_TURBO    = ModelSpec("glm-5-turbo",    Provider.ZAI, 1.20, 4.00, family="glm")
-    GLM_5V_TURBO   = ModelSpec("glm-5v-turbo",   Provider.ZAI, 1.20, 4.00, family="glm")   # vision
-    GLM_4_7        = ModelSpec("glm-4.7",        Provider.ZAI, 0.60, 2.20, family="glm")
+    GLM_5_TURBO    = ModelSpec("glm-5-turbo",    Provider.ZAI, 1.20, 4.00, family="glm", weights="glm-5-turbo")
+    GLM_5V_TURBO   = ModelSpec("glm-5v-turbo",   Provider.ZAI, 1.20, 4.00, family="glm", weights="glm-5v-turbo")   # vision
+    GLM_4_7        = ModelSpec("glm-4.7",        Provider.ZAI, 0.60, 2.20, family="glm", weights="glm-4.7")
     GLM_4_7_FLASHX = ModelSpec("glm-4.7-flashx", Provider.ZAI, 0.07, 0.40, family="glm")   # JUDGE pick — full 4.7 reasoning, ~20x cheaper
-    GLM_4_7_FLASH  = ModelSpec("glm-4.7-flash",  Provider.ZAI, 0.00, 0.00, family="glm")   # free tier
-    GLM_4_6V       = ModelSpec("glm-4.6v",       Provider.ZAI, 0.30, 0.90, family="glm")   # vision variant
+    GLM_4_7_FLASH  = ModelSpec("glm-4.7-flash",  Provider.ZAI, 0.00, 0.00, family="glm", weights="glm-4.7-flash")   # free tier
+    GLM_4_6V       = ModelSpec("glm-4.6v",       Provider.ZAI, 0.30, 0.90, family="glm", weights="glm-4.6v")   # vision variant
 
     # ──────── xAI / Grok (US jurisdiction, OpenAI-compatible) ────────
     # Registry per docs.x.ai 2026-07-08. Retired names (grok-4, grok-4-fast,
@@ -300,7 +315,7 @@ class LLMModel(Enum):
         quirks=frozenset({ModelQuirk.NO_CUSTOM_TEMPERATURE}))
     KIMI_K2_7_CODE = ModelSpec(
         "kimi-k2.7-code", Provider.MOONSHOT, 0.95, 4.00,
-        max_context_len=262_144, family="kimi")
+        max_context_len=262_144, family="kimi", weights="kimi-k2.7-code")
     KIMI_K2_7_CODE_HIGHSPEED = ModelSpec(
         "kimi-k2.7-code-highspeed", Provider.MOONSHOT, 1.90, 8.00,
         max_context_len=262_144, family="kimi")
@@ -312,15 +327,30 @@ class LLMModel(Enum):
     # US-jurisdiction route to open-weight models, incl. Chinese-origin
     # families — with a zero-data-retention routing policy enabled on the
     # account, requests reach only non-retaining hosts. Prices = cheapest-host
-    # list at registration; ZDR routing may pick a pricier host. One row per
-    # family flagship; add more ids as needed.
+    # list at registration; ZDR routing may pick a pricier host.
+    #
+    # `weights=` pairs each row with its DIRECT (mainland) twin above, so
+    # `LLMModel.<NATIVE>.us_route()` returns the row here — see route_twins().
+    # Prices re-verified against openrouter.ai model pages 2026-07-30.
+    # Rows marked PROMO are launch discounts that WILL expire — re-verify.
     OR_DEEPSEEK_V4_FLASH = ModelSpec("deepseek/deepseek-v4-flash", Provider.OPENROUTER, 0.09,  0.18, family="deepseek", weights="deepseek-v4-flash")
     OR_DEEPSEEK_V4_PRO   = ModelSpec("deepseek/deepseek-v4-pro",   Provider.OPENROUTER, 0.435, 0.87, family="deepseek", weights="deepseek-v4-pro")
-    OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 0.93,  3.00, family="glm", weights="glm-5.2")
-    OR_QWEN_3_7_MAX      = ModelSpec("qwen/qwen3.7-max",           Provider.OPENROUTER, 1.25,  3.75, family="qwen")
-    OR_KIMI_K2_6         = ModelSpec("moonshotai/kimi-k2.6",       Provider.OPENROUTER, 0.55,  3.20, family="kimi", weights="kimi-k2.6")
-    OR_KIMI_K3           = ModelSpec("moonshotai/kimi-k3",         Provider.OPENROUTER, 3.00, 15.00, family="kimi", quirks=_NO_TEMP, weights="kimi-k3")
-    OR_MINIMAX_M3        = ModelSpec("minimax/minimax-m3",         Provider.OPENROUTER, 0.30,  1.20, family="minimax")
+    OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 0.36,  0.75, family="glm", weights="glm-5.2")      # PROMO (-70%)
+    OR_GLM_5             = ModelSpec("z-ai/glm-5",                 Provider.OPENROUTER, 0.60,  1.92, family="glm", weights="glm-5")
+    OR_GLM_5_TURBO       = ModelSpec("z-ai/glm-5-turbo",           Provider.OPENROUTER, 1.20,  4.00, family="glm", weights="glm-5-turbo")
+    OR_GLM_5V_TURBO      = ModelSpec("z-ai/glm-5v-turbo",          Provider.OPENROUTER, 1.20,  4.00, family="glm", weights="glm-5v-turbo")  # vision
+    OR_GLM_4_7           = ModelSpec("z-ai/glm-4.7",               Provider.OPENROUTER, 0.40,  1.75, family="glm", weights="glm-4.7")
+    OR_GLM_4_7_FLASH     = ModelSpec("z-ai/glm-4.7-flash",         Provider.OPENROUTER, 0.06,  0.40, family="glm", weights="glm-4.7-flash")  # free on the direct endpoint, paid here
+    OR_GLM_4_6V          = ModelSpec("z-ai/glm-4.6v",              Provider.OPENROUTER, 0.30,  0.90, family="glm", weights="glm-4.6v")     # vision
+    OR_QWEN_3_7_MAX      = ModelSpec("qwen/qwen3.7-max",           Provider.OPENROUTER, 1.475, 4.425, family="qwen")   # no direct-endpoint row registered
+    OR_KIMI_K2_6         = ModelSpec("moonshotai/kimi-k2.6",       Provider.OPENROUTER, 0.60,  3.41, family="kimi", weights="kimi-k2.6")
+    OR_KIMI_K2_7_CODE    = ModelSpec("moonshotai/kimi-k2.7-code",  Provider.OPENROUTER, 0.71,  3.50, family="kimi", weights="kimi-k2.7-code")
+    OR_KIMI_K3           = ModelSpec("moonshotai/kimi-k3",         Provider.OPENROUTER, 2.90, 15.00, family="kimi", quirks=_NO_TEMP, weights="kimi-k3")
+    OR_MINIMAX_M3        = ModelSpec("minimax/minimax-m3",         Provider.OPENROUTER, 0.24,  0.96, family="minimax")  # PROMO (-60%)
+    # Verified ABSENT from OpenRouter 2026-07-30 (so their direct rows above
+    # have no US twin — us_route() correctly returns None): glm-4.7-flashx
+    # (only glm-4.7-flash is listed) and kimi-k2.7-code-highspeed (a serving
+    # mode of kimi-k2.7-code upstream, not a separate model).
 
     # ──────── AWS Bedrock (US-hosted us-east-1; auth via the standard AWS
     # credential chain, AWS_PROFILE). model_id MUST be the exact Bedrock
@@ -712,17 +742,25 @@ class LLMModel(Enum):
         """The US-jurisdiction route to these weights, or None if there is
         none registered. Returns self when this route is already US.
 
-        Prefers a hosted US endpoint (OpenRouter / Bedrock) over nothing; a
-        self-served route (local / cluster) is reported by ``self_route()``
-        instead, since "no third party at all" is a different guarantee than
-        "a US third party".
+        With several US routes the tie-break is ``_US_ROUTE_PREFERENCE``
+        (OpenRouter first — one API key, versus Bedrock's account setup);
+        filter ``routes()`` yourself to pin a specific host. A self-served
+        route is reported by ``self_route()`` instead, since "no third party
+        at all" is a different guarantee than "a US third party".
         """
         if self.jurisdiction == "us":
             return self
-        for m in self.route_twins():
-            if m.jurisdiction == "us":
-                return m
-        return None
+        candidates = [m for m in self.route_twins() if m.jurisdiction == "us"]
+        if not candidates:
+            return None
+        return min(
+            candidates,
+            key=lambda m: (
+                _US_ROUTE_PREFERENCE.index(m.provider)
+                if m.provider in _US_ROUTE_PREFERENCE
+                else len(_US_ROUTE_PREFERENCE)
+            ),
+        )
 
     def self_route(self) -> Optional["LLMModel"]:
         """The self-hosted route to these weights (local / SLURM cluster), or

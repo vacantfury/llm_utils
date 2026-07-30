@@ -39,6 +39,18 @@ providers, and a 60-test offline suite added (`tests/`, `uv run pytest`).
 
 **Added:**
 
+- **Dual-route registry for Chinese models** — every mainland-endpoint model
+  that OpenRouter also serves now has a US-hosted twin row, and the routes are
+  linked: `Provider.jurisdiction` (`"us"` / `"prc"` / `"self"`),
+  `ModelSpec.weights` identifying the underlying model, and
+  `LLMModel.route_twins()` / `routes()` / `us_route()` / `self_route()` to move
+  between routes without hardcoding ids. 12 of 14 mainland rows resolve to a
+  verified OpenRouter twin (`glm-4.7-flashx` and `kimi-k2.7-code-highspeed`
+  are genuinely absent there, so they report no US route). New OpenRouter
+  rows: GLM-5, GLM-5-turbo, GLM-5V-turbo, GLM-4.7, GLM-4.7-flash, GLM-4.6V,
+  Kimi-K2.7-code. Claude direct↔Bedrock and DeepSeek-V3.2 Bedrock↔cluster are
+  linked the same way. Jurisdiction is a transport FACT — the routing policy
+  stays with consumers.
 - Resumable batch trio on `GoogleService` (`submit_batch_chat` /
   `batch_chat_status` / `harvest_batch_chat`) — all three major providers now
   have it; base-class stubs give every other service a clean
@@ -57,6 +69,12 @@ providers, and a 60-test offline suite added (`tests/`, `uv run pytest`).
   three providers), registry integrity, factory dispatch, usage hook,
   mechanism-error contract. Registry prices spot-verified against official
   provider pages 2026-07-30: all 38 checked rows MATCH.
+
+**Changed:** OpenRouter row prices re-verified against openrouter.ai
+2026-07-30 and corrected — `OR_GLM_5_2` $0.93/$3.00 → $0.36/$0.75 (launch
+promo), `OR_KIMI_K3` → $2.90/$15.00, `OR_KIMI_K2_6` → $0.60/$3.41,
+`OR_QWEN_3_7_MAX` → $1.475/$4.425, `OR_MINIMAX_M3` → $0.24/$0.96 (promo).
+Promo rows are marked in the registry: they will expire and need re-checking.
 
 **Fixed:**
 
