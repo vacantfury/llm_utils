@@ -6,14 +6,22 @@ text_docs/private/
 
 # OS junk
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
 
 # Python
 __pycache__/
 *.py[cod]
-.venv/
+*.pyo
+*.egg-info/
+*.egg
 dist/
 build/
-*.egg-info/
+.venv/
+.eggs/
+*.whl
 
 # Secrets — defense in depth (no secret files should ever exist here)
 .env
@@ -28,3 +36,19 @@ secrets/
 
 # pytest
 .pytest_cache/
+
+# ruff
+.ruff_cache/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
