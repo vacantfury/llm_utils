@@ -168,10 +168,11 @@ class ClaudeService(BaseLLMService):
                 if hasattr(msg, "usage") and msg.usage:
                     in_tok = msg.usage.input_tokens or 0
                     out_tok = msg.usage.output_tokens or 0
+                    # Batches API bills at half the realtime list price.
                     cost = (
                         in_tok * self.model.input_price
                         + out_tok * self.model.output_price
-                    ) / 1_000_000
+                    ) / 1_000_000 * self.BATCH_COST_DISCOUNT
                     self._record_usage(in_tok, out_tok, cost, is_test)
                 results[cid] = text
             else:

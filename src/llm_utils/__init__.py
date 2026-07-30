@@ -3,7 +3,7 @@ LLM utility module for working with various language models.
 """
 
 # Define version information
-__version__ = "3.1.0"
+__version__ = "4.0.0"
 
 # Core components
 from .llm_model import LLMModel, Provider, ModelQuirk

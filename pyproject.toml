@@ -1,6 +1,6 @@
 [project]
 name = "llm_utils"
-version = "3.1.0"
+version = "4.0.0"
 description = "One interface over LLM providers: OpenAI, Anthropic, Gemini, Bedrock, local HF models, and SLURM-cluster serving."
 readme = "README.md"
 license = "MIT"

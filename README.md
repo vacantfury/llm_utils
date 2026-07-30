@@ -54,8 +54,13 @@ code is untouched.
 `batch_chat` takes `(id, messages)` conversations, where each message is a
 `(text, image_or_None)` tuple; it returns `(id, response)` pairs in input
 order. Anthropic and Google route through their native batch endpoints at
-~50% of real-time cost; OpenAI-family services fan out concurrent real-time
-calls under a semaphore.
+50% of real-time cost. Real OpenAI **auto-routes by estimated job cost**:
+jobs estimated at ≥ `batch_threshold_usd` (default $1) go through OpenAI's
+native Batch API (50% price, queued — 24h window, usually much faster);
+smaller jobs fan out concurrent real-time calls under a semaphore. Override
+with `use_batch_api=True/False` at construction. OpenAI-COMPATIBLE endpoints
+(DeepSeek, Z.AI, xAI, …) have no batch API and always run real-time
+concurrent.
 
 ```python
 conversations = [
@@ -67,10 +72,11 @@ for conv_id, response in results:
     print(conv_id, response)
 ```
 
-On `ClaudeService`, batches are also **resumable across processes**:
-`submit_batch_chat(...)` returns the provider batch id without waiting;
-persist it anywhere, then `harvest_batch_chat(batch_id)` from any later
-invocation (None while still running); `batch_chat_status(batch_id)` polls.
+On `ClaudeService` and `OpenAIService`, batches are also **resumable across
+processes**: `submit_batch_chat(...)` returns the provider batch id without
+waiting; persist it anywhere, then `harvest_batch_chat(batch_id)` from any
+later invocation (None while still running); `batch_chat_status(batch_id)`
+polls.
 
 ### Token logprobs
 

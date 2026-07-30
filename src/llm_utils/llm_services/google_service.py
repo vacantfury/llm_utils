@@ -187,10 +187,11 @@ class GoogleService(BaseLLMService):
                     um = resp.usage_metadata
                     in_tok = getattr(um, "prompt_token_count", 0) or 0
                     out_tok = getattr(um, "candidates_token_count", 0) or 0
+                    # Batch mode bills at half the realtime list price.
                     cost = (
                         in_tok * self.model.input_price
                         + out_tok * self.model.output_price
-                    ) / 1_000_000
+                    ) / 1_000_000 * self.BATCH_COST_DISCOUNT
                     self._record_usage(in_tok, out_tok, cost, is_test)
             else:
                 # No inline response = the item errored (a content/safety block

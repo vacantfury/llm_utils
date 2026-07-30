@@ -170,6 +170,12 @@ class BaseLLMService(ABC):
     - total_usage: all calls (algorithm + test evaluation)
     """
 
+    # The native batch APIs (OpenAI Batch, Anthropic Message Batches, Google
+    # batch mode) all bill at 50% of the realtime list prices the registry
+    # stores, so every batch-path cost recording multiplies by this factor.
+    # Registry prices stay realtime list — never store batch prices there.
+    BATCH_COST_DISCOUNT: float = 0.5
+
     # Consumer-installable usage hook — the seam for durable accounting (e.g. a
     # cost ledger). `_record_usage` is the ONE choke point every provider
     # funnels through, so a registered hook sees every call; the in-memory

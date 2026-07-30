@@ -3,6 +3,40 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v4.0.0 — 2026-07-30
+
+**BREAKING (behavior, not signatures):** `OpenAIService.batch_chat` on the
+real OpenAI endpoint now auto-routes big jobs through the native **Batch API**
+(50% price, 24h completion window — usually much faster). Small jobs keep the
+concurrent realtime path, so under-threshold behavior is unchanged.
+
+- **Added:** cost-threshold auto-routing on `OpenAIService.batch_chat` —
+  jobs whose estimated worst-case cost (chars/4 input estimate, `max_tokens`
+  output ceiling) is ≥ `batch_threshold_usd` (default $1) go through the
+  Batch API; below, the realtime concurrent path. Constructor overrides:
+  `use_batch_api=None` (auto) / `True` (always batch — note `chat` funnels
+  through `batch_chat`, so forcing True queues singles too) / `False` (never).
+  The JSONL transport is in-memory (Files API upload, no disk); batch files
+  are deleted after harvest. OpenAI-COMPATIBLE endpoints (DeepSeek, Z.AI,
+  xAI, Moonshot, OpenRouter) have no `/v1/batches` and always run realtime.
+- **Added:** resumable batch trio on `OpenAIService` — `submit_batch_chat` /
+  `batch_chat_status` / `harvest_batch_chat`, same contract as
+  `ClaudeService`'s (persist the batch id, harvest from any later process).
+  A poll timeout in blocking `batch_chat` raises with the batch id in the
+  message; the batch keeps running server-side and stays harvestable.
+- **Fixed:** `.env` loading now finds a FIFO `.env` — secret managers that
+  mount the file without plaintext on disk (1Password Environments) serve it
+  as a FIFO, which python-dotenv's own `find_dotenv` (`isfile`) skips; the
+  CWD-upward search is now ours and accepts regular files and FIFOs alike.
+- **Fixed:** batch-path cost recording on `ClaudeService` and `GoogleService`
+  overstated spend 2× — both recorded realtime list prices while the batch
+  APIs bill at 50%. All batch paths now apply
+  `BaseLLMService.BATCH_COST_DISCOUNT` (0.5); registry prices stay realtime
+  list. Realtime paths (`chat`, `chat_structured`) were and remain full price.
+
+Migration note for consumers: bump deliberately. If a run needs realtime
+turnaround regardless of size, pass `use_batch_api=False` at construction.
+
 ## v3.1.0 — 2026-07-24
 
 - **Added:** `batch_chat_with_logprobs(conversations, system_message=...,

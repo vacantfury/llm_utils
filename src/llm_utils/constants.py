@@ -2,6 +2,7 @@
 Constants for LLM configurations and endpoints.
 """
 import os
+import stat
 from typing import Final, Optional, TYPE_CHECKING
 
 from dotenv import load_dotenv
@@ -12,10 +13,33 @@ if TYPE_CHECKING:
 
 # API keys are read as plain environment variables. They can be exported in the
 # shell, injected by a secret manager, or placed in a gitignored `.env` in the
-# CONSUMER's working tree — load_dotenv() searches upward from the CWD, which is
-# what an installed package must do (a path relative to this file would point
-# into site-packages). override=False: the real environment always wins.
-load_dotenv(override=False)
+# CONSUMER's working tree. The upward search from the CWD is our own (not
+# python-dotenv's find_dotenv) because secret managers that mount `.env`
+# without plaintext-on-disk (e.g. 1Password Environments) serve it as a FIFO,
+# which find_dotenv's isfile() check skips. stat() never opens the file; the
+# actual open happens in load_dotenv and may wait on the manager's unlock —
+# intended. override=False: the real environment always wins.
+
+
+def _find_dotenv_upward() -> Optional[str]:
+    d = os.getcwd()
+    while True:
+        p = os.path.join(d, ".env")
+        try:
+            mode = os.stat(p).st_mode
+            if stat.S_ISREG(mode) or stat.S_ISFIFO(mode):
+                return p
+        except OSError:
+            pass
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+_dotenv_path = _find_dotenv_upward()
+if _dotenv_path:
+    load_dotenv(_dotenv_path, override=False)
 
 
 # API Keys (loaded from environment variables)
