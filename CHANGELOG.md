@@ -3,6 +3,60 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v5.1.0 — 2026-08-02
+
+`ClusterModelServerManager` hardening to the family cluster-job standard §5
+(teardown & zombie prevention). Additive: the public seam is unchanged;
+existing configs keep working (all new config keys have fail-safe defaults).
+
+**Added:**
+
+- **Upfront config validation (T1):** every required key for every instance
+  is checked BEFORE the first sbatch, and all instances' sbatch scripts are
+  generated before any submission — a bad config (missing key, missing chat
+  template) now fails with zero jobs up instead of dying mid-batch. All
+  missing keys are reported at once.
+- **Durable job ledger (T2):** every submitted job id is persisted to
+  `<log_dir>/slurm_jobs_<run_id>.json` at submission time (atomic writes),
+  so even a SIGKILL'd orchestrator leaves a reap list. At the next run's
+  first `start_server`, unclosed ledgers from prior runs are reaped —
+  scancel only when the owning orchestrator is provably dead (same host,
+  pid gone); a live pid (concurrent run) is left alone and a foreign-host
+  ledger is reported, never guessed at. `reap_orphans: false` = report-only.
+- **Graceful-death teardown (T3):** atexit + SIGTERM/SIGINT handlers scancel
+  owned jobs (previously only `__del__` tried, which Python does not
+  guarantee). Handlers chain to whatever was installed before;
+  `install_signal_handlers: false` keeps atexit only.
+- **Eviction hysteresis + recovery (T4):** a pool endpoint is evicted only
+  after `eviction_failure_threshold` (default 3) CONSECUTIVE health-check
+  failures (was: one failed ping = permanent eviction), with a structured
+  `EVICTION …` log line as the threshold's tuning-data stream. Evicted
+  endpoints whose SLURM job is still alive are re-probed on the maintenance
+  cadence and re-added on recovery; once the job leaves the queue they are
+  dropped for good. `acquire_endpoint`/`wait_for_first_server` no longer
+  report "all failed" while an eviction is pending recovery;
+  `get_server_status` gains `num_evicted`.
+- **Per-model timeouts (T5):** `slurm_cmd_timeout`, `health_check_timeout`,
+  and `health_recheck_interval` now come from each model's OWN config
+  (was: first-registered-config-wins for every model).
+- **Run-scoped log subdir:** `run_scoped_logs: true` nests sbatch
+  stdout/stderr in `<log_dir>/run_<run_id>/` so concurrent runs from one
+  CWD don't interleave; `log_dir` (default `logs`) is now configurable.
+  Ledgers always stay in the base dir so later runs can discover them.
+
+**Fixed:**
+
+- The pool's Event-as-condvar (`_pool_changed`) replaced with a real
+  `threading.Condition` — the old check-then-wait pattern could miss a
+  wakeup slipped between a waiter's check and its wait under concurrent
+  acquire/release (bounded by the poll timeout, now gone entirely).
+- `sbatch` submission now retries transient NON-timeout failures too
+  (e.g. "Socket timed out on send/recv operation" exits nonzero), with a
+  short backoff; previously only `subprocess.TimeoutExpired` retried and
+  any nonzero exit killed the run on the first blip.
+
+36 new offline tests (`tests/test_cluster_manager.py`); suite total 113.
+
 ## v5.0.0 — 2026-07-30
 
 Full-system audit release: every serving route audited against the base

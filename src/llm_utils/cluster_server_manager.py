@@ -8,8 +8,16 @@ Handles:
 - Multi-instance support: N servers per model on different ports
 - Dynamic server pool with acquire/release endpoint allocation
 - Background monitoring: servers are added to the pool as they become healthy
+- Zombie prevention: durable on-disk job ledger + atexit/SIGTERM/SIGINT teardown
+- Health-check hysteresis: N consecutive failures to evict; evicted servers
+  whose SLURM job still runs are re-probed and re-added on recovery
 """
+import atexit
+import json
+import os
 import re
+import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -23,6 +31,37 @@ from ._logging import get_logger
 logger = get_logger(__name__)
 
 ClusterConfigDict = Dict[str, Any]
+
+# Config keys every server instance needs. Checked for ALL instances BEFORE
+# the first sbatch, so a bad config never dies mid-submission with jobs
+# already up (family cluster-job standard, rule T1).
+REQUIRED_CONFIG_KEYS = (
+    "num_instances",
+    "port",
+    "partition",
+    "gpu_memory_utilization",
+    "max_model_len",
+    "num_gpus",
+    "cpus_per_task",
+    "mem_gb",
+    "time_limit",
+    "hf_home",
+)
+# Required only when config['env_setup'] does not replace the default
+# conda-module env lines.
+CONDA_ENV_KEYS = ("cuda_module", "conda_env")
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if a process with this pid exists on THIS host (signal-0 probe)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # PermissionError etc.: the process exists but isn't ours.
+        return True
+    return True
 
 
 def _slurm_time_to_seconds(t: Any) -> Optional[int]:
@@ -76,6 +115,23 @@ class ClusterModelServerManager:
     Servers are added to the pool dynamically as they become healthy.
     Tasks acquire/release endpoints — no blocking on all servers at startup.
 
+    Zombie prevention: every submitted job id is persisted to an on-disk
+    ledger (``<log_dir>/slurm_jobs_<run_id>.json``) at submission time, so
+    even a SIGKILL'd orchestrator leaves a reap list — the next run from the
+    same directory reaps provably-orphaned jobs (same host, owner pid dead)
+    and reports the rest. Graceful deaths (atexit, SIGTERM, SIGINT) scancel
+    owned jobs directly.
+
+    Optional config keys (fail-safe defaults in code; consumers tune them in
+    their cluster YAML):
+        log_dir ("logs")               — sbatch stdout/stderr + ledger dir
+        run_scoped_logs (False)        — nest job logs in a per-run subdir so
+                                         concurrent runs don't interleave
+        reap_orphans (True)            — False = report orphans, never scancel
+        install_signal_handlers (True) — False = atexit teardown only
+        eviction_failure_threshold (3) — consecutive health failures to evict
+                                         (tuning data: the EVICTION log lines)
+
     Usage:
         manager = ClusterModelServerManager()
         manager.start_server(LLMModel.PIXTRAL_12B, config)  # returns immediately
@@ -90,8 +146,14 @@ class ClusterModelServerManager:
     def __init__(self):
         self._jobs: Dict[LLMModel, List[dict]] = {}
         self._pool: Dict[LLMModel, List[dict]] = {}
-        self._pool_lock = threading.Lock()
-        self._pool_changed = threading.Event()
+        # One Condition guards _pool AND _evicted. A real Condition (not the
+        # old check-then-Event pattern, which could miss a wakeup slipped in
+        # between a waiter's check and its wait under concurrent
+        # acquire/release).
+        self._pool_cond = threading.Condition()
+        # Endpoints evicted by health hysteresis, keyed by model — kept for
+        # recovery re-probing while their SLURM job is still alive.
+        self._evicted: Dict[LLMModel, List[dict]] = {}
 
         self.model_configs: Dict[LLMModel, ClusterConfigDict] = {}
 
@@ -103,14 +165,33 @@ class ClusterModelServerManager:
         # Cache: (partition, frozenset(excluded_types)) -> [node names with excluded GPU]
         self._gpu_type_exclude_cache: Dict[tuple, List[str]] = {}
 
+        # Durable job ledger: every submitted job id is persisted at
+        # submission time so ANY orchestrator death — including SIGKILL,
+        # which no handler catches — leaves a reap list for the next run.
+        self._run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
+        self._ledger_jobs: List[dict] = []
+        self._ledger_closed = False
+        self._log_dir: Optional[Path] = None     # resolved at first start_server
+        self._ledger_dir: Optional[Path] = None  # always the BASE log dir, so
+                                                 # later runs can discover
+                                                 # prior ledgers even when job
+                                                 # logs are run-scoped
+        self._orphans_checked = False
+
+        # Graceful-death teardown, registered once at first submission.
+        self._teardown_registered = False
+        self._prev_signal_handlers: Dict[int, Any] = {}
+
     # ==================== Public API ====================
 
     def start_server(self, model: LLMModel, config: ClusterConfigDict) -> None:
         """
         Start vLLM server(s) for the given model.
 
-        Submits SLURM jobs and starts a background monitor thread.
-        Returns immediately — does NOT wait for servers to be healthy.
+        Validates the full config and generates every instance's sbatch
+        script BEFORE the first submission, then submits SLURM jobs and
+        starts a background monitor thread. Returns immediately — does NOT
+        wait for servers to be healthy.
 
         Args:
             model: The cluster model to serve.
@@ -125,7 +206,16 @@ class ClusterModelServerManager:
             raise ValueError(
                 f"{model.model_id} is not a cluster model (provider: {model.provider})")
 
+        self._validate_config(model, config)
+
         self.model_configs[model] = config
+        self._resolve_log_dir(config)
+        if not self._orphans_checked:
+            self._orphans_checked = True
+            try:
+                self._reap_orphan_ledgers(config)
+            except Exception:
+                logger.exception("orphan-ledger check failed — continuing")
 
         num_instances = config["num_instances"]
         base_port = config["port"]
@@ -134,14 +224,25 @@ class ClusterModelServerManager:
             f"Starting {num_instances} vLLM server(s) for {model.model_id} "
             f"(ports {base_port}-{base_port + num_instances - 1})")
 
-        self._jobs[model] = []
-        self._pool[model] = []
-
+        # Generate every instance's script before submitting any of them:
+        # generation errors (missing chat template, bad time spec) surface
+        # with zero jobs up. A submission failure mid-batch can still leave
+        # earlier instances running — those are already in the ledger, and
+        # the atexit/signal handlers reap them if the run dies on the error.
+        sbatch_paths: List[Path] = []
         for i in range(num_instances):
-            instance_port = base_port + i
-            instance_config = {**config, "port": instance_port}
+            instance_config = {**config, "port": base_port + i}
+            sbatch_paths.append(
+                self._generate_sbatch(model, instance_config, instance_id=i))
 
-            sbatch_path = self._generate_sbatch(model, instance_config, instance_id=i)
+        self._register_teardown(config)
+
+        self._jobs[model] = []
+        with self._pool_cond:
+            self._pool[model] = []
+
+        for i, sbatch_path in enumerate(sbatch_paths):
+            instance_port = base_port + i
             job_id = self._submit_sbatch(sbatch_path)
 
             self._jobs[model].append({
@@ -150,6 +251,15 @@ class ClusterModelServerManager:
                 "instance_id": i,
                 "discovered": False,
             })
+            self._ledger_jobs.append({
+                "job_id": job_id,
+                "model": model.name,
+                "port": instance_port,
+                "instance_id": i,
+                "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "cancelled": False,
+            })
+            self._write_ledger()
             logger.info(f"  Instance {i}: SLURM job {job_id}, port {instance_port}")
 
         if self._monitor_thread is None or not self._monitor_thread.is_alive():
@@ -178,63 +288,61 @@ class ClusterModelServerManager:
             timeout = config.get("cluster_server_endpoint_timeout", 10000)
         deadline = time.time() + timeout
 
-        while time.time() < deadline:
-            with self._pool_lock:
+        with self._pool_cond:
+            while True:
                 for entry in self._pool.get(model, []):
                     if entry["is_available"]:
                         entry["is_available"] = False
                         logger.debug(f"Acquired endpoint {entry['endpoint']}")
                         return entry["endpoint"]
 
-            # Fail fast if NO server was ever submitted for this model — a
-            # serve-discovery miss (a model the task requested that the
-            # orchestrator never added to its cluster-model set). Without this,
-            # acquire blocks the full cluster_server_endpoint_timeout (~2.8h)
-            # on a pool that can never fill (observed 2026-07-16).
-            jobs = self._jobs.get(model, [])
-            if not jobs:
-                raise RuntimeError(
-                    f"No vLLM server was ever started for {model.model_id}: a task "
-                    f"requested it (e.g. as a judge/guard) but the orchestrator did "
-                    f"not add it to its cluster-model set (serve-discovery miss). "
-                    f"Check the orchestrator's serve wiring.")
-            # Short-circuit on all-failed: if every submitted job for this
-            # model is already discovered (resolved by monitor) and the pool
-            # is still empty, every one of them failed — no point waiting.
-            # Mirrors wait_for_first_server's check; lets tasks fail fast
-            # when their judge can't start (e.g. QoS-blocked) instead of
-            # hanging up to cluster_server_endpoint_timeout (10000s default).
-            if all(j["discovered"] for j in jobs):
-                with self._pool_lock:
-                    pool_empty = not self._pool.get(model)
-                if pool_empty:
+                # Fail fast if NO server was ever submitted for this model — a
+                # serve-discovery miss (a model the task requested that the
+                # orchestrator never added to its cluster-model set). Without this,
+                # acquire blocks the full cluster_server_endpoint_timeout (~2.8h)
+                # on a pool that can never fill (observed 2026-07-16).
+                jobs = self._jobs.get(model, [])
+                if not jobs:
+                    raise RuntimeError(
+                        f"No vLLM server was ever started for {model.model_id}: a task "
+                        f"requested it (e.g. as a judge/guard) but the orchestrator did "
+                        f"not add it to its cluster-model set (serve-discovery miss). "
+                        f"Check the orchestrator's serve wiring.")
+                # Short-circuit on all-failed: if every submitted job for this
+                # model is already discovered (resolved by monitor) and the pool
+                # is still empty, every one of them failed — no point waiting.
+                # An evicted-but-recovering endpoint (its job still RUNNING)
+                # does NOT count as failed: keep waiting for the monitor's
+                # recovery re-probe instead.
+                if (all(j["discovered"] for j in jobs)
+                        and not self._pool.get(model)
+                        and not self._evicted.get(model)):
                     raise RuntimeError(
                         f"All {len(jobs)} server job(s) for "
                         f"{model.model_id} failed during discovery. "
-                        f"Check logs/vllm_{model.name.lower()}_*.err for "
+                        f"Check {self._err_log_hint(model)} for "
                         f"startup errors (config mismatch, QoS-blocked, OOM, etc.).")
 
-            remaining = deadline - time.time()
-            wait_time = min(wait_interval, max(remaining, 0))
-            if wait_time <= 0:
-                break
-            self._pool_changed.wait(timeout=wait_time)
-            self._pool_changed.clear()
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    pool_size = len(self._pool.get(model, []))
+                    break
+                self._pool_cond.wait(timeout=min(wait_interval, remaining))
 
         raise RuntimeError(
             f"No endpoint available for {model.model_id} within {timeout}s. "
-            f"Pool has {len(self._pool.get(model, []))} server(s), "
+            f"Pool has {pool_size} server(s), "
             f"all busy or none started.")
 
     def release_endpoint(self, model: LLMModel, endpoint: str) -> None:
         """Release an endpoint back to the pool, marking it as available."""
-        with self._pool_lock:
+        with self._pool_cond:
             for entry in self._pool.get(model, []):
                 if entry["endpoint"] == endpoint:
                     entry["is_available"] = True
                     logger.debug(f"Released endpoint {endpoint}")
                     break
-        self._pool_changed.set()
+            self._pool_cond.notify_all()
 
     def get_num_instances(self, model: LLMModel) -> int:
         """Get the number of submitted server instances for a model."""
@@ -242,7 +350,7 @@ class ClusterModelServerManager:
 
     def get_num_ready(self, model: LLMModel) -> int:
         """Get the number of healthy, pool-registered endpoints for a model."""
-        with self._pool_lock:
+        with self._pool_cond:
             return len(self._pool.get(model, []))
 
     def wait_for_first_server(self, model: LLMModel, timeout: Optional[int] = None) -> str:
@@ -271,58 +379,53 @@ class ClusterModelServerManager:
         last_progress_log = start
         progress_interval = 60.0  # emit a "still waiting" status every 60s
 
-        while time.time() < deadline:
-            with self._pool_lock:
+        with self._pool_cond:
+            while True:
                 if self._pool.get(model):
                     first_endpoint = self._pool[model][0]["endpoint"]
                     logger.info(f"First server ready: {first_endpoint}")
                     return first_endpoint
 
-            # Fail fast if NO server was ever submitted for this model
-            # (serve-discovery miss) — never block the full timeout on a pool
-            # that can never fill. Parallels acquire_endpoint's guard.
-            jobs = self._jobs.get(model, [])
-            if not jobs:
-                raise RuntimeError(
-                    f"No vLLM server was ever started for {model.model_id} "
-                    f"(serve-discovery miss). Check the orchestrator's serve "
-                    f"wiring.")
-            # Short-circuit on all-failed: if every submitted job for this
-            # model is already discovered (resolved by monitor) and the pool
-            # is still empty, every one of them failed — no point waiting.
-            if all(j["discovered"] for j in jobs):
-                with self._pool_lock:
-                    pool_empty = not self._pool.get(model)
-                if pool_empty:
+                # Fail fast if NO server was ever submitted for this model
+                # (serve-discovery miss) — never block the full timeout on a pool
+                # that can never fill. Parallels acquire_endpoint's guard.
+                jobs = self._jobs.get(model, [])
+                if not jobs:
+                    raise RuntimeError(
+                        f"No vLLM server was ever started for {model.model_id} "
+                        f"(serve-discovery miss). Check the orchestrator's serve "
+                        f"wiring.")
+                # Short-circuit on all-failed (see acquire_endpoint; evicted
+                # entries pending recovery don't count as failed).
+                if (all(j["discovered"] for j in jobs)
+                        and not self._pool.get(model)
+                        and not self._evicted.get(model)):
                     raise RuntimeError(
                         f"All {len(jobs)} server job(s) for "
                         f"{model.model_id} failed during discovery. "
-                        f"Check logs/vllm_{model.name.lower()}_*.err for "
+                        f"Check {self._err_log_hint(model)} for "
                         f"startup errors (config mismatch, OOM, etc.).")
 
-            # Periodic progress log so an extended wait isn't silent (the
-            # monitor only logs successes/failures; PENDING + slow-server
-            # would otherwise produce no orchestrator-side output for many
-            # minutes).
-            now = time.time()
-            if now - last_progress_log >= progress_interval:
-                with self._pool_lock:
+                # Periodic progress log so an extended wait isn't silent (the
+                # monitor only logs successes/failures; PENDING + slow-server
+                # would otherwise produce no orchestrator-side output for many
+                # minutes).
+                now = time.time()
+                if now - last_progress_log >= progress_interval:
                     pool_size = len(self._pool.get(model, []))
-                jobs_now = self._jobs.get(model, [])
-                discovered = sum(1 for j in jobs_now if j["discovered"])
-                elapsed = int(now - start)
-                logger.info(
-                    f"Still waiting for {model.model_id}: elapsed={elapsed}s, "
-                    f"jobs_submitted={len(jobs_now)}, jobs_discovered="
-                    f"{discovered}, pool_size={pool_size}. "
-                    f"(See per-job monitor lines above for what's blocking.)")
-                last_progress_log = now
+                    discovered = sum(1 for j in jobs if j["discovered"])
+                    elapsed = int(now - start)
+                    logger.info(
+                        f"Still waiting for {model.model_id}: elapsed={elapsed}s, "
+                        f"jobs_submitted={len(jobs)}, jobs_discovered="
+                        f"{discovered}, pool_size={pool_size}. "
+                        f"(See per-job monitor lines above for what's blocking.)")
+                    last_progress_log = now
 
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                break
-            self._pool_changed.wait(timeout=min(10, remaining))
-            self._pool_changed.clear()
+                remaining = deadline - now
+                if remaining <= 0:
+                    break
+                self._pool_cond.wait(timeout=min(10, remaining))
 
         raise RuntimeError(
             f"No server for {model.model_id} became ready within {timeout}s. "
@@ -337,6 +440,7 @@ class ClusterModelServerManager:
             "num_submitted": 0,
             "num_ready": 0,
             "num_available": 0,
+            "num_evicted": 0,
         }
 
         if model not in self._jobs:
@@ -346,11 +450,12 @@ class ClusterModelServerManager:
         status["job_ids"] = [j["job_id"] for j in jobs]
         status["num_submitted"] = len(jobs)
 
-        with self._pool_lock:
+        with self._pool_cond:
             pool = self._pool.get(model, [])
             status["num_ready"] = len(pool)
             status["num_available"] = sum(1 for e in pool if e["is_available"])
             status["endpoints"] = [e["endpoint"] for e in pool]
+            status["num_evicted"] = len(self._evicted.get(model, []))
 
         if status["num_ready"] == 0:
             status["state"] = "pending"
@@ -362,26 +467,37 @@ class ClusterModelServerManager:
         return status
 
     def shutdown_all(self) -> None:
-        """Cancel all active SLURM jobs and clean up."""
+        """Cancel all active SLURM jobs and clean up.
+
+        Idempotent — also runs from atexit and the SIGTERM/SIGINT handlers,
+        possibly after a manual call already did the work.
+        """
         self._stop_monitor.set()
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=5)
 
+        if not self._jobs and self._ledger_closed:
+            return  # already shut down (e.g. atexit after a manual call)
+
+        cancelled_ids: List[str] = []
         for model, jobs in self._jobs.items():
             for job_info in jobs:
                 job_id = job_info["job_id"]
                 logger.info(f"Cancelling SLURM job {job_id} ({model.model_id})")
-                try:
-                    subprocess.run(
-                        ["scancel", job_id],
-                        capture_output=True, timeout=10)
-                except (subprocess.TimeoutExpired, FileNotFoundError):
-                    logger.warning(f"Could not cancel job {job_id}")
+                self._scancel(job_id)
+                cancelled_ids.append(job_id)
 
         self._jobs.clear()
-        with self._pool_lock:
+        with self._pool_cond:
             self._pool.clear()
-        self._pool_changed.set()
+            self._evicted.clear()
+            self._pool_cond.notify_all()
+
+        # A closed ledger tells the next run there is nothing to reap.
+        if cancelled_ids:
+            self._mark_ledger_cancelled(cancelled_ids)
+        self._ledger_closed = True
+        self._write_ledger()
         logger.info("All vLLM servers shut down")
 
     def shutdown_model(self, model: LLMModel) -> None:
@@ -394,22 +510,224 @@ class ClusterModelServerManager:
         Safe to call on a model that's already been torn down (no-op).
         """
         jobs = self._jobs.pop(model, [])
+        cancelled_ids: List[str] = []
         for job_info in jobs:
             job_id = job_info["job_id"]
             logger.info(
                 f"Cancelling SLURM job {job_id} ({model.model_id}) [mid-run]")
-            try:
-                subprocess.run(
-                    ["scancel", job_id], capture_output=True, timeout=10)
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                logger.warning(f"Could not cancel job {job_id}")
-        with self._pool_lock:
+            self._scancel(job_id)
+            cancelled_ids.append(job_id)
+        with self._pool_cond:
             self._pool.pop(model, None)
-        self._pool_changed.set()
+            self._evicted.pop(model, None)
+            self._pool_cond.notify_all()
+        if cancelled_ids:
+            self._mark_ledger_cancelled(cancelled_ids)
 
     def __del__(self):
         if self._jobs:
             self.shutdown_all()
+
+    # ==================== Config Validation ====================
+
+    def _validate_config(self, model: LLMModel, config: ClusterConfigDict) -> None:
+        """Validate every required key BEFORE the first sbatch (T1) — a bad
+        config must never die mid-submission with jobs already up. Reports
+        ALL missing keys at once, not the first KeyError hit."""
+        missing = [k for k in REQUIRED_CONFIG_KEYS if k not in config]
+        if not config.get("env_setup"):
+            missing += [k for k in CONDA_ENV_KEYS if k not in config]
+        if missing:
+            raise ValueError(
+                f"Cluster config for {model.model_id} is missing required "
+                f"key(s): {', '.join(sorted(missing))}. Nothing was submitted.")
+        n = config["num_instances"]
+        if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+            raise ValueError(
+                f"num_instances for {model.model_id} must be a positive int, "
+                f"got {n!r}. Nothing was submitted.")
+
+    # ==================== Log Dir & Job Ledger ====================
+
+    def _resolve_log_dir(self, config: ClusterConfigDict) -> Path:
+        """Resolve the log directory once, at first start_server.
+
+        ``log_dir`` (default "logs") is where sbatch stdout/stderr land;
+        ``run_scoped_logs: true`` nests them in a per-run subdir so
+        concurrent runs from one CWD don't interleave. Job ledgers always
+        stay in the BASE dir so later runs can discover prior runs' ledgers.
+        """
+        if self._log_dir is None:
+            base = Path(config.get("log_dir", "logs"))
+            self._ledger_dir = base
+            if config.get("run_scoped_logs"):
+                self._log_dir = base / f"run_{self._run_id}"
+            else:
+                self._log_dir = base
+        return self._log_dir
+
+    def _err_log_hint(self, model: LLMModel) -> str:
+        """Where to look for a failed server's stderr, for error messages."""
+        return f"{self._log_dir or 'logs'}/vllm_{model.name.lower()}_*.err"
+
+    def _ledger_path(self) -> Path:
+        return self._ledger_dir / f"slurm_jobs_{self._run_id}.json"
+
+    def _write_ledger(self) -> None:
+        """Persist the job ledger (atomic tmp+rename). Best-effort: a ledger
+        IO failure must not kill the run — it only degrades crash reaping."""
+        if self._ledger_dir is None:
+            return
+        data = {
+            "run_id": self._run_id,
+            "host": socket.gethostname(),
+            "pid": os.getpid(),
+            "closed": self._ledger_closed,
+            "jobs": self._ledger_jobs,
+        }
+        try:
+            self._ledger_dir.mkdir(parents=True, exist_ok=True)
+            path = self._ledger_path()
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps(data, indent=2))
+            os.replace(tmp, path)
+        except OSError as e:
+            logger.warning(f"could not write job ledger {self._ledger_path()}: {e}")
+
+    def _mark_ledger_cancelled(self, job_ids: List[str]) -> None:
+        ids = set(job_ids)
+        for entry in self._ledger_jobs:
+            if entry["job_id"] in ids:
+                entry["cancelled"] = True
+        self._write_ledger()
+
+    def _reap_orphan_ledgers(self, config: ClusterConfigDict) -> None:
+        """Reap-or-report jobs from PRIOR runs' unclosed ledgers (T2).
+
+        Reaps (scancel) only when the owning orchestrator is provably dead:
+        same host AND its pid no longer exists. A live pid means a concurrent
+        run from this CWD — leave its servers alone. A different host means
+        the pid can't be probed from here — report, never guess. Set config
+        ``reap_orphans: false`` to report-only.
+        """
+        if self._ledger_dir is None or not self._ledger_dir.exists():
+            return
+        reap = config.get("reap_orphans", True)
+        this_host = socket.gethostname()
+
+        for path in sorted(self._ledger_dir.glob("slurm_jobs_*.json")):
+            if path.name == self._ledger_path().name:
+                continue
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError) as e:
+                logger.warning(f"unreadable job ledger {path}: {e}")
+                continue
+            if data.get("closed"):
+                continue
+            open_jobs = [j for j in data.get("jobs", []) if not j.get("cancelled")]
+            if not open_jobs:
+                continue
+
+            host, pid = data.get("host"), data.get("pid")
+            job_ids = [str(j["job_id"]) for j in open_jobs]
+            if host != this_host:
+                logger.warning(
+                    f"Unclosed job ledger {path.name} from host {host!r} "
+                    f"(this host: {this_host!r}) — cannot verify its "
+                    f"orchestrator from here. If that run crashed, scancel "
+                    f"manually: scancel {' '.join(job_ids)}")
+                continue
+            try:
+                owner_alive = bool(pid) and _pid_alive(int(pid))
+            except (TypeError, ValueError):
+                owner_alive = False
+            if owner_alive:
+                logger.info(
+                    f"Job ledger {path.name} belongs to live pid {pid} "
+                    f"(likely a concurrent run from this directory) — "
+                    f"leaving its jobs alone.")
+                continue
+
+            # Provably orphaned: same host, owner pid dead.
+            if not reap:
+                logger.warning(
+                    f"Orphaned job ledger {path.name} (dead pid {pid}); "
+                    f"reap_orphans=false — scancel manually: "
+                    f"scancel {' '.join(job_ids)}")
+                continue
+
+            all_verified = True
+            for j in open_jobs:
+                job_id = str(j["job_id"])
+                state = self._get_job_state(job_id, config)
+                if state == self.STATE_QUERY_FAILED:
+                    # Leave the ledger open so the NEXT run retries this job.
+                    all_verified = False
+                    logger.warning(
+                        f"could not verify orphan job {job_id} (squeue "
+                        f"failed); leaving ledger {path.name} open")
+                    continue
+                if state is None:
+                    continue  # already left the queue
+                logger.warning(
+                    f"Reaping orphaned SLURM job {job_id} "
+                    f"({j.get('model', '?')}) from dead run "
+                    f"{data.get('run_id', path.name)}")
+                self._scancel(job_id)
+            if all_verified:
+                data["closed"] = True
+                data["closed_by"] = self._run_id
+                try:
+                    path.write_text(json.dumps(data, indent=2))
+                except OSError as e:
+                    logger.warning(f"could not mark ledger {path} closed: {e}")
+
+    # ==================== Graceful-Death Teardown ====================
+
+    def _register_teardown(self, config: ClusterConfigDict) -> None:
+        """atexit + SIGTERM/SIGINT teardown (T3): ``__del__`` alone is not
+        guaranteed by Python, so graceful deaths must scancel owned jobs
+        explicitly. Only SIGKILL escapes — that's what the on-disk ledger
+        covers. Handlers chain to whatever was installed before us."""
+        if self._teardown_registered:
+            return
+        self._teardown_registered = True
+        atexit.register(self._atexit_teardown)
+        if not config.get("install_signal_handlers", True):
+            return
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                self._prev_signal_handlers[sig] = signal.signal(
+                    sig, self._signal_teardown)
+            except ValueError:
+                # Not in the main thread — signal handlers can't be installed
+                # from here; atexit still covers normal interpreter exit.
+                logger.warning(
+                    "not in main thread: SIGTERM/SIGINT teardown handlers not "
+                    "installed (atexit teardown still active)")
+                return
+
+    def _atexit_teardown(self) -> None:
+        if self._jobs:
+            logger.info("atexit: tearing down vLLM server jobs")
+            self.shutdown_all()
+
+    def _signal_teardown(self, signum, frame) -> None:
+        logger.warning(
+            f"received signal {signum}: cancelling vLLM server jobs before exit")
+        self.shutdown_all()
+        prev = self._prev_signal_handlers.get(signum)
+        if prev is signal.SIG_IGN:
+            return
+        if callable(prev):
+            # e.g. default_int_handler → KeyboardInterrupt propagates.
+            prev(signum, frame)
+            return
+        # SIG_DFL / None: restore the default disposition and re-deliver so
+        # the process exits with the correct signal status.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
     # ==================== Background Monitor ====================
 
@@ -419,20 +737,17 @@ class ClusterModelServerManager:
         Phase 1 (discovery): poll SLURM jobs and add healthy endpoints to the
         pool as they become reachable. Each job is "discovered" exactly once.
 
-        Phase 2 (maintenance): periodically re-ping every pool entry's /health.
-        If a previously-discovered server stops responding (vLLM OOM'd, GPU
-        ECC'd, etc.), evict it from the pool. Without this, acquire_endpoint()
-        would hand out a stale dead endpoint and the task would hang on the
-        first request rather than waiting for a fresh one.
+        Phase 2 (maintenance): per model, on that model's OWN
+        ``health_recheck_interval`` cadence (per-model config — T5):
+        re-ping every pool entry's /health with eviction hysteresis, then
+        re-probe evicted entries whose SLURM job is still alive and re-add
+        them on recovery (T4). Without maintenance, acquire_endpoint() would
+        hand out a stale dead endpoint and the task would hang on the first
+        request rather than waiting for a fresh one.
 
         Runs until _stop_monitor is set (i.e. until shutdown_all()).
         """
-        config = next(iter(self.model_configs.values()), {})
-        poll_interval = config.get("monitor_poll_interval", 10)
-        # Cadence at which discovered endpoints get re-health-checked.
-        # 60s default keeps overhead near zero for typical pool sizes.
-        recheck_interval = config.get("health_recheck_interval", 60)
-        last_recheck = 0.0
+        last_recheck: Dict[LLMModel, float] = {}
 
         while not self._stop_monitor.is_set():
             # Both phases are exception-guarded: an uncaught error would kill
@@ -444,20 +759,30 @@ class ClusterModelServerManager:
             except Exception:
                 logger.exception("monitor discovery pass failed — continuing")
 
-            # ---- Phase 2: re-health-check discovered endpoints ----
+            # ---- Phase 2: re-health-check + recovery, per model ----
             try:
                 now = time.time()
-                if now - last_recheck >= recheck_interval:
-                    last_recheck = now
-                    self._recheck_pool_health()
+                for model, config in list(self.model_configs.items()):
+                    interval = config.get("health_recheck_interval", 60)
+                    if now - last_recheck.get(model, 0.0) < interval:
+                        continue
+                    last_recheck[model] = now
+                    self._recheck_pool_health(model, config)
+                    self._reprobe_evicted(model, config)
             except Exception:
                 logger.exception("monitor health recheck failed — continuing")
 
+            # Poll on the fastest cadence any served model asked for.
+            poll_interval = min(
+                (c.get("monitor_poll_interval", 10)
+                 for c in self.model_configs.values()),
+                default=10)
             self._stop_monitor.wait(timeout=poll_interval)
 
     def _discovery_pass(self) -> None:
         """One discovery sweep over undiscovered jobs (see _monitor_loop)."""
         for model, jobs in list(self._jobs.items()):
+            config = self.model_configs.get(model, {})
             for job_info in jobs:
                 if job_info["discovered"]:
                     continue
@@ -467,7 +792,7 @@ class ClusterModelServerManager:
                 instance_id = job_info["instance_id"]
                 instance_suffix = f"[{instance_id}]" if instance_id > 0 else ""
 
-                state = self._get_job_state(job_id)
+                state = self._get_job_state(job_id, config)
 
                 if state == self.STATE_QUERY_FAILED:
                     # Transient squeue hiccup (the controller is known to
@@ -484,10 +809,9 @@ class ClusterModelServerManager:
                 job_info["_state_query_failures"] = 0
 
                 if state is None:
-                    model_safe_name = model.name.lower()
                     logger.warning(
                         f"Server{instance_suffix} (job {job_id}) failed. "
-                        f"Check logs/vllm_{model_safe_name}_*.err")
+                        f"Check {self._err_log_hint(model)}")
                     job_info["discovered"] = True
                     continue
 
@@ -500,7 +824,7 @@ class ClusterModelServerManager:
                         job_info["_logged_pending"] = True
                     continue
 
-                node = self._resolve_job_node(job_id)
+                node = self._resolve_job_node(job_id, config)
                 if not node:
                     # Log first N occurrences so we know SLURM isn't surfacing
                     # the node assignment yet — silent-forever before this fix.
@@ -514,7 +838,7 @@ class ClusterModelServerManager:
                     continue
 
                 endpoint = f"http://{node}:{port}/v1"
-                healthy, err = self._health_check(endpoint)
+                healthy, err = self._health_check(endpoint, config)
 
                 if not healthy:
                     # The previously-silent failure mode. Could be:
@@ -532,7 +856,7 @@ class ClusterModelServerManager:
                             f"(attempt {attempts}, err={err}). Retrying.")
 
                 if healthy:
-                    with self._pool_lock:
+                    with self._pool_cond:
                         # Guard the teardown race: if this model was shut
                         # down (or shutdown_all cleared the pool) while we
                         # were health-checking, do NOT resurrect an
@@ -544,47 +868,120 @@ class ClusterModelServerManager:
                             "endpoint": endpoint,
                             "is_available": True,
                             "job_id": job_id,
+                            "consecutive_health_failures": 0,
                         })
                         pool_size = len(self._pool[model])
+                        self._pool_cond.notify_all()
                     job_info["discovered"] = True
                     logger.info(
                         f"Server{instance_suffix} ready at {endpoint} "
                         f"(pool size: {pool_size})")
-                    self._pool_changed.set()
 
-    def _recheck_pool_health(self) -> None:
-        """Re-ping every pool entry's /health; evict any that fail.
+    def _recheck_pool_health(
+        self, model: LLMModel, config: ClusterConfigDict
+    ) -> None:
+        """Re-ping every pool entry's /health; evict after N consecutive fails.
 
         Catches mid-run vLLM crashes (OOM, GPU error, network blip) so that
-        acquire_endpoint() doesn't hand out a dead URL. Eviction does NOT
-        scancel the SLURM job — the job is presumed already dying or done,
-        and a future shutdown_all/_model will clean it up.
-
-        Single-failure eviction is intentional: /health is a constant-time
-        endpoint, so a 5s timeout failing means the server really is gone.
+        acquire_endpoint() doesn't hand out a dead URL. Eviction has
+        HYSTERESIS (T4): a single failed ping no longer evicts —
+        ``eviction_failure_threshold`` consecutive failures (fail-safe
+        default 3; consumers tune it in their cluster YAML, tuning data =
+        the EVICTION log lines below) must accumulate first, so one dropped
+        packet or a briefly-overloaded server doesn't empty the pool.
+        Eviction does NOT scancel the SLURM job — evicted entries move to
+        the recovery list, where _reprobe_evicted re-adds them if the
+        server comes back.
         """
-        with self._pool_lock:
-            snapshot = {m: list(entries) for m, entries in self._pool.items()}
+        threshold = config.get("eviction_failure_threshold", 3)
+        with self._pool_cond:
+            entries = list(self._pool.get(model, []))
 
         evicted_any = False
-        for model, entries in snapshot.items():
-            for entry in entries:
-                healthy, err = self._health_check(entry["endpoint"])
-                if healthy:
-                    continue
-                with self._pool_lock:
-                    pool = self._pool.get(model, [])
-                    self._pool[model] = [
-                        e for e in pool if e["endpoint"] != entry["endpoint"]
-                    ]
+        for entry in entries:
+            healthy, err = self._health_check(entry["endpoint"], config)
+            if healthy:
+                entry["consecutive_health_failures"] = 0
+                continue
+            fails = entry.get("consecutive_health_failures", 0) + 1
+            entry["consecutive_health_failures"] = fails
+            if fails < threshold:
                 logger.warning(
-                    f"Mid-run health check failed for {entry['endpoint']} "
-                    f"({model.model_id}): {err}. Evicted from pool "
-                    f"(remaining: {len(self._pool.get(model, []))}).")
-                evicted_any = True
+                    f"Health check failed for {entry['endpoint']} "
+                    f"({model.model_id}): {err} "
+                    f"({fails}/{threshold} consecutive failures before eviction)")
+                continue
+            with self._pool_cond:
+                pool = self._pool.get(model, [])
+                if entry in pool:
+                    pool.remove(entry)
+                self._evicted.setdefault(model, []).append(entry)
+                remaining = len(pool)
+            # Structured eviction-event line — the tuning data stream for
+            # eviction_failure_threshold.
+            logger.warning(
+                f"EVICTION model={model.model_id} "
+                f"endpoint={entry['endpoint']} job={entry.get('job_id')} "
+                f"consecutive_failures={fails} err={err} "
+                f"remaining_pool={remaining} — moved to recovery watch "
+                f"(re-added if its server recovers)")
+            evicted_any = True
 
         if evicted_any:
-            self._pool_changed.set()
+            with self._pool_cond:
+                self._pool_cond.notify_all()
+
+    def _reprobe_evicted(
+        self, model: LLMModel, config: ClusterConfigDict
+    ) -> None:
+        """Recovery half of T4: an evicted endpoint whose SLURM job is still
+        alive gets re-probed each maintenance pass and re-added on recovery
+        (transient network partition, vLLM briefly unresponsive under load).
+        Once SLURM reports the job gone, the endpoint is dropped for good.
+
+        A recovered endpoint re-enters the pool as available even if it was
+        held at eviction time — the old holder's request already failed, and
+        its release_endpoint() on a non-pool entry is a harmless no-op.
+        """
+        with self._pool_cond:
+            entries = list(self._evicted.get(model, []))
+        if not entries:
+            return
+
+        for entry in entries:
+            state = self._get_job_state(str(entry.get("job_id", "")), config)
+            if state == self.STATE_QUERY_FAILED:
+                continue  # unknown — retry next pass
+            if state is None:
+                with self._pool_cond:
+                    evicted = self._evicted.get(model, [])
+                    if entry in evicted:
+                        evicted.remove(entry)
+                logger.info(
+                    f"Evicted endpoint {entry['endpoint']} "
+                    f"({model.model_id}): job {entry.get('job_id')} has left "
+                    f"the queue — dropped permanently.")
+                continue
+
+            healthy, _err = self._health_check(entry["endpoint"], config)
+            if not healthy:
+                continue
+            entry["consecutive_health_failures"] = 0
+            entry["is_available"] = True
+            with self._pool_cond:
+                # Teardown race: don't resurrect after shutdown_model/all.
+                if model not in self._pool or self._stop_monitor.is_set():
+                    continue
+                evicted = self._evicted.get(model, [])
+                if entry in evicted:
+                    evicted.remove(entry)
+                self._pool[model].append(entry)
+                pool_size = len(self._pool[model])
+                self._pool_cond.notify_all()
+            logger.info(
+                f"RECOVERY model={model.model_id} "
+                f"endpoint={entry['endpoint']} job={entry.get('job_id')} "
+                f"re-added to pool (pool size: {pool_size})")
 
     # ==================== SLURM Helpers ====================
 
@@ -595,6 +992,7 @@ class ClusterModelServerManager:
         """Generate sbatch script for a vLLM server instance."""
         from .constants import MAX_SLURM_TIME_LIMIT
 
+        log_dir = self._resolve_log_dir(config)
         model_safe_name = model.name.lower()
         instance_suffix = f"_i{instance_id}" if instance_id > 0 else ""
 
@@ -604,7 +1002,7 @@ class ClusterModelServerManager:
         # are exposed as SLURM features, so `--constraint` can't express this).
         explicit_excluded = list(config.get("excluded_nodes", []))
         type_excluded_nodes = self._resolve_gpu_type_excludes(
-            config["partition"], config.get("gpu_types_excluded", []))
+            config["partition"], config.get("gpu_types_excluded", []), config)
         all_excluded = sorted(set(explicit_excluded) | set(type_excluded_nodes))
         exclude_directive = (
             f"#SBATCH --exclude={','.join(all_excluded)}"
@@ -730,11 +1128,11 @@ class ClusterModelServerManager:
             f"#SBATCH --cpus-per-task={config['cpus_per_task']}",
             f"#SBATCH --mem={config['mem_gb']}GB",
             f"#SBATCH --time={time_limit}",
-            f"#SBATCH --output=logs/vllm_{model_safe_name}{instance_suffix}_%j.out",
-            f"#SBATCH --error=logs/vllm_{model_safe_name}{instance_suffix}_%j.err",
+            f"#SBATCH --output={log_dir}/vllm_{model_safe_name}{instance_suffix}_%j.out",
+            f"#SBATCH --error={log_dir}/vllm_{model_safe_name}{instance_suffix}_%j.err",
             "",
             "# Setup environment",
-            "mkdir -p logs",
+            f"mkdir -p {log_dir}",
             *env_lines,
             "",
             "# HuggingFace cache (+ offline mode where compute nodes have no internet)",
@@ -747,9 +1145,9 @@ class ClusterModelServerManager:
         script = "\n".join(sbatch_lines) + "\n"
 
         # slurmstepd opens the --output/--error files (relative to the submit
-        # cwd) BEFORE the script body runs, so the in-script `mkdir -p logs`
-        # is too late on a fresh directory — create it at generation time.
-        Path("logs").mkdir(exist_ok=True)
+        # cwd) BEFORE the script body runs, so the in-script `mkdir -p` is
+        # too late on a fresh directory — create it at generation time.
+        log_dir.mkdir(parents=True, exist_ok=True)
 
         sbatch_path = self._sbatch_dir / f"vllm_{model_safe_name}{instance_suffix}.sbatch"
         sbatch_path.write_text(script)
@@ -759,22 +1157,24 @@ class ClusterModelServerManager:
     def _submit_sbatch(self, sbatch_path: Path) -> str:
         """Submit sbatch script and return the SLURM job ID.
 
-        The login-node SLURM controller is intermittently slow to answer
-        `sbatch` (observed >30s under load), which used to kill the whole run
-        on a single blip. Retry a few times with a generous per-attempt
-        timeout instead of failing hard.
+        The login-node SLURM controller is intermittently slow or flaky
+        (observed >30s answers and transient "Socket timed out on send/recv
+        operation" errors under load), which used to kill the whole run on a
+        single blip. Retry BOTH timeouts and nonzero exits a few times with
+        a short backoff — transient controller errors are indistinguishable
+        from permanent ones cheaply, and a genuinely bad script only wastes
+        ~12s of retries.
         """
-        last_err = None
+        last_err: Optional[str] = None
         for attempt in range(4):
+            if attempt:
+                time.sleep(2 * attempt)  # 2s, 4s, 6s between attempts
             try:
                 result = subprocess.run(
                     ["sbatch", str(sbatch_path)],
                     capture_output=True, text=True, timeout=120)
-                if result.returncode != 0:
-                    raise RuntimeError(f"sbatch failed: {result.stderr.strip()}")
-                return result.stdout.strip().split()[-1]
-            except subprocess.TimeoutExpired as e:
-                last_err = e
+            except subprocess.TimeoutExpired:
+                last_err = "sbatch timed out after 120s"
                 logger.warning(
                     f"sbatch slow (attempt {attempt + 1}/4) for "
                     f"{sbatch_path.name}; retrying")
@@ -783,16 +1183,31 @@ class ClusterModelServerManager:
                 raise RuntimeError(
                     "sbatch command not found. "
                     "Are you running this on the cluster login node?")
-        raise RuntimeError(f"sbatch timed out after 4 attempts: {last_err}")
+            if result.returncode == 0:
+                return result.stdout.strip().split()[-1]
+            last_err = result.stderr.strip() or f"exit code {result.returncode}"
+            logger.warning(
+                f"sbatch failed (attempt {attempt + 1}/4) for "
+                f"{sbatch_path.name}: {last_err}; retrying")
+        raise RuntimeError(f"sbatch failed after 4 attempts: {last_err}")
 
-    def _resolve_job_node(self, job_id: str) -> Optional[str]:
+    def _scancel(self, job_id: str) -> None:
+        """Cancel one SLURM job; failures are logged, never raised."""
+        try:
+            subprocess.run(
+                ["scancel", str(job_id)], capture_output=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            logger.warning(f"Could not cancel job {job_id}")
+
+    def _resolve_job_node(
+        self, job_id: str, config: ClusterConfigDict
+    ) -> Optional[str]:
         """
         Get the IP address or hostname of the node running a SLURM job.
 
         Resolves via scontrol: job → NodeList → NodeAddr (IP).
         Falls back to hostname if IP resolution fails.
         """
-        config = next(iter(self.model_configs.values()), {})
         cmd_timeout = config.get("slurm_cmd_timeout", 15)
 
         try:
@@ -838,7 +1253,8 @@ class ClusterModelServerManager:
             return None
 
     def _resolve_gpu_type_excludes(
-        self, partition: str, excluded_types: List[str]
+        self, partition: str, excluded_types: List[str],
+        config: ClusterConfigDict
     ) -> List[str]:
         """
         Resolve `gpu_types_excluded` to a concrete node-name list by querying sinfo.
@@ -857,7 +1273,6 @@ class ClusterModelServerManager:
         if cache_key in self._gpu_type_exclude_cache:
             return self._gpu_type_exclude_cache[cache_key]
 
-        config = next(iter(self.model_configs.values()), {})
         cmd_timeout = config.get("slurm_cmd_timeout", 15)
 
         try:
@@ -906,11 +1321,12 @@ class ClusterModelServerManager:
     # dead job — a live server must not be blackholed by one slow squeue.
     STATE_QUERY_FAILED = "QUERY_FAILED"
 
-    def _get_job_state(self, job_id: str) -> Optional[str]:
+    def _get_job_state(
+        self, job_id: str, config: ClusterConfigDict
+    ) -> Optional[str]:
         """Get the current SLURM state of a job (RUNNING, PENDING, etc.).
         None = the job is no longer in the queue; STATE_QUERY_FAILED = squeue
         itself failed (transient — retry)."""
-        config = next(iter(self.model_configs.values()), {})
         cmd_timeout = config.get("slurm_cmd_timeout", 15)
 
         try:
@@ -922,7 +1338,9 @@ class ClusterModelServerManager:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return self.STATE_QUERY_FAILED
 
-    def _health_check(self, endpoint: str) -> tuple[bool, Optional[str]]:
+    def _health_check(
+        self, endpoint: str, config: ClusterConfigDict
+    ) -> tuple[bool, Optional[str]]:
         """
         Check if the vLLM server is responding at the /health endpoint.
 
@@ -932,7 +1350,6 @@ class ClusterModelServerManager:
         import urllib.request
         import urllib.error
 
-        config = next(iter(self.model_configs.values()), {})
         check_timeout = config.get("health_check_timeout", 5)
 
         base_url = endpoint.rstrip("/")
