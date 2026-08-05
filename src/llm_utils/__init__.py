@@ -3,10 +3,11 @@ LLM utility module for working with various language models.
 """
 
 # Define version information
-__version__ = "5.1.0"
+__version__ = "5.2.0"
 
 # Core components
 from .llm_model import LLMModel, Provider, ModelQuirk
+from .account_status import AccountStatus, burn_rate, days_to_empty
 from .base_llm_service import (
     BaseLLMService,
     UsageStats,
@@ -51,6 +52,11 @@ __all__ = [
     'BaseLLMService',
     'UsageStats',
     'LLMServiceFactory',
+
+    # Account status (credit balance) + pure spend math
+    'AccountStatus',
+    'burn_rate',
+    'days_to_empty',
 
     # Mechanism-error helpers (transport-failure sentinel strings)
     'is_mechanism_error',

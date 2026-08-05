@@ -47,6 +47,10 @@ class OpenAIService(BaseLLMService):
     API_KEY_ENV: str = "OPENAI_API_KEY"       # env var holding the key
     BASE_URL: Optional[str] = None            # None → default OpenAI endpoint
     SERVICE_NAME: str = "OpenAI"              # for logs / error messages
+    # OpenAI exposes NO balance endpoint to any API key (the old dashboard
+    # credit_grants route now demands a browser session token; verified
+    # 2026-08-04). The org Costs/Usage APIs exist but need an Admin key —
+    # see repo TODO. BALANCE_QUERY_VIA stays None (base default).
 
     def __init__(self, model: LLMModel, **kwargs):
         super().__init__(

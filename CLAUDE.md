@@ -22,7 +22,7 @@ no site-specific hostnames).
 
 - **This repo owns:** provider transport and serving mechanics — model/provider registry
   (`LLMModel`, `Provider`), the service interface (`BaseLLMService`), concrete services,
-  usage-stat primitives, cluster server lifecycle. Example: adding a new provider client or
+  usage-stat primitives, account-status primitives (per-provider credit-balance queries + pure burn-rate math), cluster server lifecycle. Example: adding a new provider client or
   a retry policy belongs HERE.
 - **Stays in consumers:** all domain meaning. Example: a private consumer's cost-ledger
   wiring and its jurisdiction-based model-routing policy are that consumer's adapters

@@ -28,3 +28,4 @@ secrets/
 
 # pytest
 .pytest_cache/
+NOW.md

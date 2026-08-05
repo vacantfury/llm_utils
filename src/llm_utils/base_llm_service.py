@@ -319,6 +319,35 @@ class BaseLLMService(ABC):
         self.algorithm_usage = UsageStats()
         self.total_usage = UsageStats()
 
+    # How this provider's remaining-credit balance can be queried, statically
+    # discoverable so a monitor can branch policy WITHOUT a network call:
+    #   "api_key"        → get_account_status() works with the service's own key
+    #   "management_key" → the provider has an endpoint but it needs a separate
+    #                      management/admin credential (not implemented here)
+    #   None             → no balance endpoint exists (postpaid billing, or the
+    #                      provider simply doesn't expose one) — a consumer must
+    #                      estimate from its own usage ledger (the usage hook)
+    #                      and rely on CreditsExhaustedError as the reactive
+    #                      backstop.
+    BALANCE_QUERY_VIA: Optional[str] = None
+
+    def get_account_status(self) -> "AccountStatus":
+        """Point-in-time credit state from the provider's own billing endpoint.
+
+        Complements `get_usage` (in-memory, this process only): this queries
+        the ACCOUNT — spend from every machine and session shows up here.
+        Default is unsupported; services whose provider exposes a balance
+        endpoint usable with the normal API key override `_fetch_account_status`.
+        Network/auth failures propagate — a monitor must see a failed check
+        as failed, never as "no balance data".
+        """
+        from .account_status import AccountStatus
+        provider = getattr(self, "SERVICE_NAME", type(self).__name__)
+        fetch = getattr(self, "_fetch_account_status", None)
+        if fetch is None:
+            return AccountStatus(provider=provider, supported=False)
+        return fetch()
+
     # ------------------------------------------------------------------
     # Rate-limit retry helpers (shared across all services).
     # ------------------------------------------------------------------
