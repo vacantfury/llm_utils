@@ -2,7 +2,7 @@
 SLURM cluster service — uses ``AsyncOpenAI`` + ``asyncio.gather`` pointed at
 a vLLM OpenAI-compatible HTTP endpoint.
 
-Acquires an endpoint from ``ClusterModelServerManager`` for each batch call
+Acquires an endpoint from the injected server manager for each batch call
 and releases it afterwards so multiple tasks can share the server pool.
 """
 import asyncio
@@ -25,11 +25,18 @@ class SlurmClusterService(BaseLLMService):
     """Service for models served on a SLURM cluster via a vLLM HTTP server."""
 
     def __init__(self, model: LLMModel, **kwargs):
+        # Duck-typed endpoint-provider contract — any object exposing
+        # acquire_endpoint(model_id: str) -> str and
+        # release_endpoint(model_id: str, endpoint: str). The serving
+        # lifecycle (SLURM jobs, health, pooling) lives with the consumer's
+        # cluster/device layer, not in this package.
         server_manager = kwargs.pop("server_manager", None)
         if not server_manager:
             raise ValueError(
-                "SlurmClusterService requires 'server_manager' kwarg. "
-                "Use ClusterModelServerManager to start the vLLM server first."
+                "SlurmClusterService requires 'server_manager' kwarg: an "
+                "object with acquire_endpoint(model_id)/release_endpoint("
+                "model_id, endpoint). Start the vLLM servers with your "
+                "serving-lifecycle manager first."
             )
 
         super().__init__(
@@ -172,7 +179,7 @@ class SlurmClusterService(BaseLLMService):
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
 
         extra_params = kwargs.get("api_params")
-        endpoint = self.server_manager.acquire_endpoint(self.model)
+        endpoint = self.server_manager.acquire_endpoint(self.model.model_id)
         try:
             prepared = [
                 (cid, self._format_conversation(msgs, system_message))
@@ -207,7 +214,7 @@ class SlurmClusterService(BaseLLMService):
                 for (cid, _), (text, logprobs) in zip(prepared, responses)
             ]
         finally:
-            self.server_manager.release_endpoint(self.model, endpoint)
+            self.server_manager.release_endpoint(self.model.model_id, endpoint)
 
     def batch_chat(
         self,

@@ -39,7 +39,6 @@ from .llm_services import (
     SlurmClusterService,
     BedrockService,
 )
-from .cluster_server_manager import ClusterModelServerManager
 
 # Define what's exported
 __all__ = [
@@ -81,9 +80,6 @@ __all__ = [
     'LocalLMService',
     'SlurmClusterService',
     'BedrockService',
-
-    # Cluster serving lifecycle
-    'ClusterModelServerManager',
 
     # Version
     '__version__'

@@ -100,11 +100,3 @@ DEFAULT_LOCAL_BATCH_SIZE: Final[int] = 4  # Good for 1B models on MPS
 # vLLM's llm.chat() handles images automatically via structured messages.
 # No model-specific placeholders needed - just pass PIL.Image in the content:
 #   {"type": "image_url", "image_url": {"url": pil_image}}
-
-
-# =============================================================================
-# Cluster SLURM Limits
-# =============================================================================
-# Conservative fail-safe wall-time cap; a cluster profile overrides it via
-# config['max_slurm_time_limit'] (see ClusterModelServerManager._generate_sbatch).
-MAX_SLURM_TIME_LIMIT: Final[str] = "08:00:00"

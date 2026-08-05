@@ -79,13 +79,17 @@ class LLMServiceFactory:
     @classmethod
     def set_server_manager(cls, manager) -> None:
         """
-        Register the ClusterModelServerManager.
+        Register the cluster server manager.
 
         Called by the consumer's orchestrator after starting servers,
         so factory can auto-fetch endpoint URLs for cluster models.
 
         Args:
-            manager: ClusterModelServerManager instance with running servers.
+            manager: any object implementing the duck-typed endpoint-provider
+                contract — acquire_endpoint(model_id: str) -> str and
+                release_endpoint(model_id: str, endpoint: str) — with running
+                servers (the serving lifecycle lives with the consumer's
+                cluster/device layer, not in this package).
         """
         cls._server_manager = manager
 
@@ -197,7 +201,7 @@ class LLMServiceFactory:
             if cls._server_manager is None:
                 raise RuntimeError(
                     f"Cannot create service for cluster model {model.model_id}: "
-                    f"No ClusterModelServerManager registered. "
+                    f"No cluster server manager registered. "
                     f"Call LLMServiceFactory.set_server_manager() first."
                 )
             merged_kwargs["server_manager"] = cls._server_manager

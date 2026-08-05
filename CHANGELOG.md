@@ -3,6 +3,52 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v6.0.0 — 2026-08-05
+
+The SLURM serving lifecycle moves out of the provider seam: this package now
+covers the CLIENT side of cluster serving only. Cluster topology / fleet
+knowledge in the provider seam was a verified layering violation; the
+lifecycle machinery lives with the consumer's device-management layer.
+
+**Removed (breaking):**
+
+- **`ClusterModelServerManager`** (and its module `cluster_server_manager`) —
+  the vLLM-on-SLURM lifecycle manager (sbatch generation/submission, endpoint
+  pool, health monitoring, job ledger) is no longer part of this package.
+- **`chat_templates/`** (`passthrough.jinja`, `vicuna_v1.1.jinja`) — the
+  .jinja files ship with the serving layer that consumes them.
+  `LLMModel.chat_template` (the NAME, a model fact) stays in the registry.
+- **`MAX_SLURM_TIME_LIMIT`** constant — the fail-safe wall cap belongs to the
+  sbatch generator and moved with it.
+
+**Changed (breaking):**
+
+- The injected server manager's contract is now duck-typed on plain strings:
+  `acquire_endpoint(model_id: str) -> base_url` /
+  `release_endpoint(model_id: str, endpoint: str)`. `SlurmClusterService`
+  passes `model.model_id`, no longer the `LLMModel` enum member.
+  `LLMServiceFactory.set_server_manager()` accepts any object implementing
+  the contract; its missing-manager error now says "No cluster server
+  manager registered".
+
+**Migration:** construct the lifecycle manager from your device/cluster layer
+(same class name, string-keyed API) and hand it to
+`LLMServiceFactory.set_server_manager()` as before. Configs are unchanged
+except `chat_template`, which now takes a template name shipped with the
+serving layer or a path to a `.jinja` file.
+
+## v5.2.0 — 2026-08-04
+
+Account-status seam. Additive.
+
+**Added:**
+
+- **`AccountStatus`** — per-provider credit-balance queries (DeepSeek /
+  Moonshot / OpenRouter via normal keys; OpenRouter management-key upgrade
+  path), `BALANCE_QUERY_VIA` capability markers on every service.
+- Pure spend math: `burn_rate`, `days_to_empty`. Endpoints doc-verified
+  2026-08-04; 15 new offline tests.
+
 ## v5.1.0 — 2026-08-02
 
 `ClusterModelServerManager` hardening to the family cluster-job standard §5

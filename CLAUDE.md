@@ -15,26 +15,33 @@ inside the owner's research repos, extracted 2026-07-23 (owner-ordered) into one
 repo so updates propagate by version bump instead of copy-paste.
 
 One public seam over many serving routes: OpenAI / Anthropic / Gemini API clients, AWS
-Bedrock, local HuggingFace models, and SLURM-cluster vLLM serving (generic SLURM discovery —
-no site-specific hostnames).
+Bedrock, local HuggingFace models, and SLURM-served vLLM endpoints (the client side only —
+the SLURM serving lifecycle moved to the owner's device-management layer in v6.0.0).
 
 ## Scope boundary (the load-bearing line)
 
-- **This repo owns:** provider transport and serving mechanics — model/provider registry
+- **This repo owns:** provider transport — model/provider registry
   (`LLMModel`, `Provider`), the service interface (`BaseLLMService`), concrete services,
-  usage-stat primitives, account-status primitives (per-provider credit-balance queries + pure burn-rate math), cluster server lifecycle. Example: adding a new provider client or
+  usage-stat primitives, account-status primitives (per-provider credit-balance queries + pure burn-rate math). Example: adding a new provider client or
   a retry policy belongs HERE.
 - **Stays in consumers:** all domain meaning. Example: a private consumer's cost-ledger
   wiring and its jurisdiction-based model-routing policy are that consumer's adapters
   ON TOP of this package; research repos' attack/eval logic stays in those repos.
   Infrastructure is domain-blind (transport belongs to infrastructure, meaning belongs
   to domains).
+- **Stays in the device layer (v6.0.0):** the SLURM serving lifecycle (sbatch
+  generation/submission, endpoint pool, health monitoring) lives in the owner's private
+  device-management repo. `SlurmClusterService` consumes it through a duck-typed
+  contract — `acquire_endpoint(model_id) -> base_url` / `release_endpoint(model_id,
+  endpoint)` — injected via `LLMServiceFactory.set_server_manager()`; this package never
+  imports it. Cluster topology or fleet knowledge in the provider seam is a layering
+  violation.
 
 ## Dependency protocol (charter §3.7 — the standard for every consumer)
 
 - Consumers declare a **pinned uv git dependency by tag** and import only the public seam
   (the package `__init__` exports):
-  `uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v3.0.0"`
+  `uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v6.0.0"`
 - Upgrades are deliberate: bump the tag in the consumer when the consumer chooses.
   Never track a branch; never vendor a copy back into a consumer.
 - **Semver discipline:** MAJOR = breaking change to the public seam · MINOR = new

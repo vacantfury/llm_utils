@@ -165,10 +165,14 @@ retries, and may return None when the model's output failed validation.
   (`get_usage()` reports tokens + cost from the registry's prices).
 - **Concrete services** — all eleven serving routes are exported from the
   seam: `OpenAIService`, `ClaudeService`, `GoogleService`, `BedrockService`,
-  `LocalLMService` (HuggingFace on CUDA/MPS/CPU), `SlurmClusterService` (+
-  `ClusterModelServerManager`), and the OpenAI-compatible endpoint services
-  (`DeepSeekService`, `ZAIService`, `XAIService`, `MoonshotService`,
-  `OpenRouterService`) — one interface everywhere.
+  `LocalLMService` (HuggingFace on CUDA/MPS/CPU), `SlurmClusterService`, and
+  the OpenAI-compatible endpoint services (`DeepSeekService`, `ZAIService`,
+  `XAIService`, `MoonshotService`, `OpenRouterService`) — one interface
+  everywhere. `SlurmClusterService` consumes an injected server manager via
+  a duck-typed contract (`acquire_endpoint(model_id) -> base_url` /
+  `release_endpoint(model_id, endpoint)`); the SLURM serving lifecycle
+  itself lives with the consumer's cluster/device layer, not here (moved
+  out in v6.0.0).
 
 ### Error contract
 

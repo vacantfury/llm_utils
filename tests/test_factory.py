@@ -49,5 +49,5 @@ def test_cluster_model_without_manager_raises():
                       if m.provider is Provider.SLURM_CLUSTER]
     if not cluster_models:
         pytest.skip("no SLURM_CLUSTER models registered")
-    with pytest.raises(RuntimeError, match="No ClusterModelServerManager"):
+    with pytest.raises(RuntimeError, match="No cluster server manager"):
         LLMServiceFactory.create(cluster_models[0])

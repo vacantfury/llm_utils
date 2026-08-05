@@ -151,8 +151,10 @@ class ModelSpec:
     # name. None = exactly one registered route. Consumed by `route_twins()` /
     # `us_route()` / `self_route()`.
     weights: Optional[str] = None
-    # Chat template name → src/llm_utils/chat_templates/<name>.jinja, passed to
-    # vLLM as --chat-template. None means "use the tokenizer's baked-in template"
+    # Chat template NAME for self-served (vLLM) deployment — a model fact the
+    # consumer passes into its serving layer's cluster config, which resolves
+    # it to a .jinja file it ships (this package stopped owning the serving
+    # lifecycle in v6.0.0). None means "use the tokenizer's baked-in template"
     # (correct for modern chat-tuned checkpoints; their tokenizer.json ships one).
     # Set explicitly for: (a) classifiers / non-chat fine-tunes whose training
     # prompts are pre-formatted (HarmBench-Llama-2-13b-cls → "passthrough"),
@@ -676,13 +678,15 @@ class LLMModel(Enum):
 
     @property
     def chat_template(self) -> Optional[str]:
-        """Chat-template name → src/llm_utils/chat_templates/<name>.jinja.
+        """Chat-template NAME for self-served (vLLM) deployment.
 
-        None means "use the tokenizer's baked-in chat template" (vLLM
-        derives it automatically — correct for modern chat-tuned models).
-        Set explicitly for classifiers and legacy models whose tokenizer
-        doesn't ship a template. YAML can override per-deployment via
-        `cluster.chat_template` but the source of truth is this field.
+        A model fact the consumer passes into its serving layer's cluster
+        config (the serving layer resolves the name to a .jinja file it
+        ships). None means "use the tokenizer's baked-in chat template"
+        (vLLM derives it automatically — correct for modern chat-tuned
+        models). Set explicitly for classifiers and legacy models whose
+        tokenizer doesn't ship a template. YAML can override per-deployment
+        via `cluster.chat_template` but the source of truth is this field.
         """
         return self.value.chat_template
 
