@@ -85,3 +85,24 @@ def test_bedrock_claude_twins_share_temperature_quirk():
     for direct, bedrock in pairs:
         assert direct.has_quirk(ModelQuirk.NO_CUSTOM_TEMPERATURE), direct.name
         assert bedrock.has_quirk(ModelQuirk.NO_CUSTOM_TEMPERATURE), bedrock.name
+
+
+class TestVersionProvenance:
+    """`__version__` must equal the INSTALLED distribution version.
+
+    A hardcoded literal here is a second source of truth beside
+    pyproject.toml and it drifted unnoticed across two releases (v6.0.0 and
+    v6.1.0 both shipped reading "5.2.0"). Consumers print this string into
+    experiment provenance records, so a stale value silently misattributes
+    which code produced a result.
+    """
+
+    def test_version_matches_installed_distribution(self):
+        import importlib.metadata as md
+        import llm_utils
+        assert llm_utils.__version__ == md.version("llm_utils")
+
+    def test_version_is_not_a_placeholder(self):
+        import llm_utils
+        assert not llm_utils.__version__.endswith("+unknown"), (
+            "package metadata unreadable — is it installed?")

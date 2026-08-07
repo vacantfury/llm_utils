@@ -3,6 +3,19 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v6.1.1 — 2026-08-07
+
+**Fixed:**
+
+- **`__version__` is now read from the installed distribution** instead of a
+  hardcoded literal. The literal was a second source of truth beside
+  `pyproject.toml` and had drifted: v6.0.0 and v6.1.0 both shipped with it
+  still reading `"5.2.0"`. Consumers print this string into experiment
+  provenance records, so a stale value silently misattributes which code
+  produced a result — caught by a consumer's run-identity line reporting
+  5.2.0 against a verified 5.3.0 install. Two tests now pin it to the
+  distribution version.
+
 ## v6.1.0 — 2026-08-07
 
 Registry-only, additive. The same change as v5.3.0 on the 5.x maintenance

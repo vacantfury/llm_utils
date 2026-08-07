@@ -2,8 +2,21 @@
 LLM utility module for working with various language models.
 """
 
-# Define version information
-__version__ = "5.2.0"
+# Version — READ FROM THE INSTALLED DISTRIBUTION, never hardcoded here.
+#
+# A literal string in this file is a second source of truth next to
+# pyproject.toml, and it drifts silently: releases v6.0.0 and v6.1.0 both
+# shipped with this line still reading "5.2.0". That is not cosmetic — a
+# consumer whose job log prints `llm_utils.__version__` for provenance then
+# records a version that was never installed, which is exactly the failure the
+# provenance line exists to prevent (caught 2026-08-07 by a consumer's
+# run-identity print reporting 5.2.0 against a verified 5.3.0 install).
+from importlib.metadata import PackageNotFoundError, version as _dist_version
+
+try:
+    __version__ = _dist_version("llm_utils")
+except PackageNotFoundError:      # source tree with no install (e.g. `python -c` in-repo)
+    __version__ = "0.0.0+unknown"
 
 # Core components
 from .llm_model import LLMModel, Provider, ModelQuirk
