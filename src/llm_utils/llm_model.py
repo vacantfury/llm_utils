@@ -451,8 +451,14 @@ class LLMModel(Enum):
         "us.amazon.nova-premier-v1:0", Provider.BEDROCK, 0.80, 3.20,
         max_context_len=1_000_000, family="nova", max_output_tokens=5_000)
     BEDROCK_GEMMA_3_12B = ModelSpec(            # Google Gemma-3 12B (open weight, multimodal)
+        # `weights` pairs this row with the self-served GEMMA_3_12B_IT below.
+        # These are the SAME open checkpoint reached two ways — a managed US
+        # host versus our own vLLM — which is the one thing in this registry
+        # that lets a consumer hold weights fixed and vary only the serving
+        # stack. `self_route()` returns the cluster row.
         "google.gemma-3-12b-it", Provider.BEDROCK,
-        max_context_len=128_000, family="gemma", alignment_tier="mid")
+        max_context_len=128_000, family="gemma", alignment_tier="mid",
+        weights="gemma-3-12b-it")
     # -- Additional strong open-weight TEXT target (text-encoding attacks) --
     BEDROCK_LLAMA_3_3_70B = ModelSpec(          # Meta Llama 3.3 70B (open text; inference-profile)
         "us.meta.llama3-3-70b-instruct-v1:0", Provider.BEDROCK,
@@ -513,6 +519,24 @@ class LLMModel(Enum):
         # ceiling concern at our max_model_len default (20480).
         "Qwen/Qwen3-VL-8B-Instruct", Provider.SLURM_CLUSTER,
         family="qwen", alignment_tier="mid")
+    GEMMA_3_12B_IT = ModelSpec(
+        # SELF-SERVED TWIN of BEDROCK_GEMMA_3_12B — same open checkpoint, our
+        # own vLLM instead of a managed host. It exists so a consumer can run
+        # one manipulation down both routes and attribute any difference to
+        # the SERVING STACK alone (inference implementation + whatever the
+        # vendor wraps around the model), with weights, vision encoder,
+        # pretraining and post-training alignment held fixed by construction.
+        # Pair them via `weights`, never by eyeballing the two ids: the
+        # Bedrock id is dot-separated (`google.gemma-3-12b-it`) and the HF id
+        # slash-separated (`google/gemma-3-12b-it`), which is exactly the kind
+        # of near-identical string that invites a silent mix-up.
+        #
+        # Gemma-3 is multimodal and its tokenizer ships a chat template that
+        # handles image parts, so no `chat_template` override — contrast
+        # Gemma-2, whose 8192 sliding-window ceiling forced a per-consumer cap.
+        "google/gemma-3-12b-it", Provider.SLURM_CLUSTER,
+        max_context_len=128_000, family="gemma", alignment_tier="mid",
+        weights="gemma-3-12b-it")
 
     # ──────── Guard model baselines (safety classifiers — inspect/judge, not
     # attack targets). `alignment_tier` deliberately left None

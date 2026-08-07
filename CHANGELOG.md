@@ -3,6 +3,25 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v6.1.0 — 2026-08-07
+
+Registry-only, additive. The same change as v5.3.0 on the 5.x maintenance
+line, forward-ported so the v6 line does not lose the row.
+
+**Added:**
+
+- **`GEMMA_3_12B_IT`** — `google/gemma-3-12b-it` on `SLURM_CLUSTER`, the
+  self-served twin of the existing `BEDROCK_GEMMA_3_12B`. Both rows now carry
+  `weights="gemma-3-12b-it"`, so `BEDROCK_GEMMA_3_12B.self_route()` returns
+  the cluster row and `route_twins()` pairs them.
+
+  The registry's first managed-vs-self-served pair on an OPEN **multimodal**
+  checkpoint. It lets a consumer run one manipulation down both routes and
+  attribute any difference to the serving stack alone — weights, vision
+  encoder, pretraining and post-training alignment held fixed by
+  construction. The two ids differ only by `.` versus `/`, so `weights`, not
+  string similarity, is the join key.
+
 ## v6.0.0 — 2026-08-05
 
 The SLURM serving lifecycle moves out of the provider seam: this package now
