@@ -3,6 +3,18 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v5.3.1 — 2026-08-07
+
+**Fixed:**
+
+- **`__version__` is now read from the installed distribution** instead of a
+  hardcoded literal that had drifted (it still read `"5.2.0"` in v5.3.0, and
+  on the v6 line through v6.1.0). Consumers print this string into experiment
+  provenance records, so a stale value silently misattributes which code
+  produced a result — caught by a consumer's run-identity line reporting
+  5.2.0 against a verified 5.3.0 install. Two tests pin it to the
+  distribution version. Same fix as v6.1.1 on main.
+
 ## v5.3.0 — 2026-08-07
 
 Maintenance release on the 5.x line. v6.0.0 moved the SLURM serving lifecycle
