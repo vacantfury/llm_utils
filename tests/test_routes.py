@@ -104,3 +104,28 @@ class TestRouteSelection:
     def test_claude_direct_and_bedrock_are_twins(self):
         assert (LLMModel.CLAUDE_SONNET_5.route_twins()
                 == (LLMModel.BEDROCK_CLAUDE_SONNET_5,))
+
+    def test_gemma_3_12b_managed_and_self_served_are_twins(self):
+        """The registry's only managed-vs-self-served pair on an OPEN
+        multimodal checkpoint.
+
+        A consumer holding weights fixed while varying the serving stack has
+        to be able to reach both routes from one handle; this pair is what
+        makes that a registry fact rather than a naming coincidence. The two
+        ids differ only by `.` vs `/`, so pairing them by string similarity
+        would be a coin flip — `weights` is the join key.
+        """
+        bedrock, cluster = (LLMModel.BEDROCK_GEMMA_3_12B,
+                            LLMModel.GEMMA_3_12B_IT)
+        assert bedrock.route_twins() == (cluster,)
+        assert bedrock.self_route() is cluster
+        assert cluster.self_route() is cluster
+        assert bedrock.jurisdiction == "us"
+        assert cluster.jurisdiction == "self"
+        # Same checkpoint, deliberately near-identical but DISTINCT ids.
+        assert bedrock.model_id == "google.gemma-3-12b-it"
+        assert cluster.model_id == "google/gemma-3-12b-it"
+        assert bedrock.model_id != cluster.model_id
+        # Neither id is ambiguous, so from_string resolves each to one route.
+        assert LLMModel.from_string("google.gemma-3-12b-it") is bedrock
+        assert LLMModel.from_string("google/gemma-3-12b-it") is cluster

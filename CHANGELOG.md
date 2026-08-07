@@ -3,6 +3,39 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v5.3.0 — 2026-08-07
+
+Maintenance release on the 5.x line. v6.0.0 moved the SLURM serving lifecycle
+out of this package; consumers still built on the in-package
+`ClusterModelServerManager` live on this branch. Registry-only, additive.
+
+**Added:**
+
+- **`GEMMA_3_12B_IT`** — `google/gemma-3-12b-it` on `SLURM_CLUSTER`, the
+  self-served twin of the existing `BEDROCK_GEMMA_3_12B`. Both rows now carry
+  `weights="gemma-3-12b-it"`, so `BEDROCK_GEMMA_3_12B.self_route()` returns
+  the cluster row and `route_twins()` pairs them.
+
+  This is the registry's first managed-vs-self-served pair on an OPEN
+  **multimodal** checkpoint, which is what earns it a release. It lets a
+  consumer run one manipulation down both routes and attribute any difference
+  to the serving stack alone — weights, vision encoder, pretraining and
+  post-training alignment held fixed by construction. The two ids differ only
+  by `.` versus `/`, so `weights`, not string similarity, is the join key.
+
+## v5.2.0 — 2026-08-04
+
+Account-status seam. Additive. *(Entry backfilled on this branch: the v5.2.0
+tag shipped without one.)*
+
+**Added:**
+
+- **`AccountStatus`** — per-provider credit-balance queries (DeepSeek /
+  Moonshot / OpenRouter via normal keys; OpenRouter management-key upgrade
+  path), `BALANCE_QUERY_VIA` capability markers on every service.
+- Pure spend math: `burn_rate`, `days_to_empty`. Endpoints doc-verified
+  2026-08-04; 15 new offline tests.
+
 ## v5.1.0 — 2026-08-02
 
 `ClusterModelServerManager` hardening to the family cluster-job standard §5
