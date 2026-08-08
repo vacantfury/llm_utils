@@ -129,3 +129,26 @@ class TestRouteSelection:
         # Neither id is ambiguous, so from_string resolves each to one route.
         assert LLMModel.from_string("google.gemma-3-12b-it") is bedrock
         assert LLMModel.from_string("google/gemma-3-12b-it") is cluster
+
+    def test_qwen_vl_generational_ladder_is_complete(self):
+        """Three qwen-VL generations, same family and size class.
+
+        A consumer using this as a natural experiment on post-training needs
+        all three rungs to exist, to share `family`, and to be self-served —
+        otherwise "the difference is the post-training" smuggles in a vendor
+        or a serving route as well. Assert the invariants that claim rests on
+        rather than trusting the enum to stay tidy.
+        """
+        ladder = (LLMModel.QWEN2_VL_7B,
+                  LLMModel.QWEN2_5_VL_7B,
+                  LLMModel.QWEN3_VL_8B_INSTRUCT)
+        assert [m.family for m in ladder] == ["qwen"] * 3
+        assert {m.provider for m in ladder} == {Provider.SLURM_CLUSTER}
+        assert {m.jurisdiction for m in ladder} == {"self"}
+        # Distinct checkpoints: none of them is another's twin.
+        assert len({m.model_id for m in ladder}) == 3
+        for m in ladder:
+            assert m.weights is None, (
+                f"{m.name} gained a `weights` twin — the ladder assumes each "
+                "rung is a single checkpoint on a single route")
+        assert LLMModel.from_string("Qwen/Qwen2-VL-7B-Instruct") is ladder[0]

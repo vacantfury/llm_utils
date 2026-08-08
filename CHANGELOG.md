@@ -3,6 +3,29 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v6.2.0 — 2026-08-08
+
+Registry-only, additive. The same change as v5.4.0 on the 5.x maintenance
+line, forward-ported so the v6 line does not lose the row.
+
+**Added:**
+
+- **`QWEN2_VL_7B`** — `Qwen/Qwen2-VL-7B-Instruct` on `SLURM_CLUSTER`, the
+  oldest rung of the qwen-VL generational ladder
+  (`QWEN2_VL_7B` → `QWEN2_5_VL_7B` → `QWEN3_VL_8B_INSTRUCT`). The three share
+  a family and a size class and differ mainly in post-training recency, so a
+  consumer can use them as a natural experiment isolating post-training from
+  architecture and scale. A test pins the invariants that claim rests on:
+  same `family`, all self-served, three distinct checkpoints, no `weights`
+  twins.
+
+**Note (documentation, no code change):** `alignment_tier` now carries an
+explicit warning against ordering models by it. The label was checked against
+behaviour for the first time on 2026-08-07 in a five-model scan and did not
+predict — four models sharing the `mid` label spanned a 32-point range on one
+manipulation, so within-tier spread exceeded between-tier. The field remains
+for provenance only.
+
 ## v6.1.1 — 2026-08-07
 
 **Fixed:**
