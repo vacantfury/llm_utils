@@ -502,6 +502,22 @@ class LLMModel(Enum):
     PIXTRAL_12B  = ModelSpec("mistralai/Pixtral-12B-2409",      Provider.SLURM_CLUSTER,
         family="mistral", alignment_tier="weak")
     LLAVA_7B     = ModelSpec("llava-hf/llava-1.5-7b-hf",        Provider.SLURM_CLUSTER)
+    QWEN2_VL_7B = ModelSpec(
+        # OLDEST rung of the qwen-VL generational ladder
+        # (QWEN2_VL_7B -> QWEN2_5_VL_7B -> QWEN3_VL_8B_INSTRUCT). The three
+        # share a family and a size class and differ mainly in how recently
+        # they were post-trained, which makes the ladder a natural experiment:
+        # a behaviour present only at the top rung was INTRODUCED by recent
+        # post-training rather than by architecture or scale.
+        #
+        # ⚠️ Do NOT reach for `alignment_tier` to order this ladder. The label
+        # is coarse and hand-assigned, and it was checked against behaviour
+        # once (2026-08-07, a five-model scan): four models sharing the `mid`
+        # label spanned a 32-point range on one manipulation, so within-tier
+        # spread exceeded between-tier. The field stays for provenance; it is
+        # not a predictor, and nothing should be ordered by it.
+        "Qwen/Qwen2-VL-7B-Instruct", Provider.SLURM_CLUSTER,
+        max_context_len=32_768, family="qwen", alignment_tier="mid")
     QWEN2_5_VL_7B = ModelSpec("Qwen/Qwen2.5-VL-7B-Instruct",    Provider.SLURM_CLUSTER,
         family="qwen", alignment_tier="mid")
     # Cluster-served VLMs: safety-aligned (Meta) + cross-family (OpenGVLab).
