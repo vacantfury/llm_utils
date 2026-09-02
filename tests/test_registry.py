@@ -81,6 +81,7 @@ def test_bedrock_claude_twins_share_temperature_quirk():
         (LLMModel.CLAUDE_SONNET_5, LLMModel.BEDROCK_CLAUDE_SONNET_5),
         (LLMModel.CLAUDE_OPUS_4_8, LLMModel.BEDROCK_CLAUDE_OPUS_4_8),
         (LLMModel.CLAUDE_FABLE_5, LLMModel.BEDROCK_CLAUDE_FABLE_5),
+        (LLMModel.CLAUDE_FABLE_5_1, LLMModel.BEDROCK_CLAUDE_FABLE_5_1),
     ]
     for direct, bedrock in pairs:
         assert direct.has_quirk(ModelQuirk.NO_CUSTOM_TEMPERATURE), direct.name
