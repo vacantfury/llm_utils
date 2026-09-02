@@ -254,6 +254,13 @@ class LLMModel(Enum):
     # zero-data-retention org gets a 400 on every request).
     CLAUDE_FABLE_5  = ModelSpec("claude-fable-5",           Provider.ANTHROPIC, 10.00, 50.00,
         max_context_len=1_000_000, quirks=_NO_TEMP | _THINKING_BUDGET, weights="claude-fable-5")
+    # Fable 5.1 (shipped 2026-09-01): Fable 5's successor in the same tier at the same
+    # per-token price ($10/$50; cache reads cut to $0.25/MTok), 1M context, 128K output,
+    # always-on thinking, 30-day retention required. Breaking vs Fable 5: forced
+    # tool_choice (`any`/`tool`) returns 400; thinking blocks bind to the producing model;
+    # editing earlier turns invalidates thinking blocks (append-only harnesses only).
+    CLAUDE_FABLE_5_1 = ModelSpec("claude-fable-5-1",        Provider.ANTHROPIC, 10.00, 50.00,
+        max_context_len=1_000_000, quirks=_NO_TEMP | _THINKING_BUDGET, weights="claude-fable-5-1")
     # Haiku
     CLAUDE_HAIKU_4_5 = ModelSpec("claude-haiku-4-5-20251001", Provider.ANTHROPIC, 1.00, 5.00, weights="claude-haiku-4-5")
 
@@ -382,6 +389,10 @@ class LLMModel(Enum):
         "us.anthropic.claude-fable-5", Provider.BEDROCK,
         max_context_len=200_000, family="claude", alignment_tier="strong",
         quirks=_NO_TEMP | _THINKING_BUDGET, weights="claude-fable-5")
+    BEDROCK_CLAUDE_FABLE_5_1 = ModelSpec(       # Fable 5.1 twin (2026-09-01); list price unpublished → UNTRACKED
+        "us.anthropic.claude-fable-5-1", Provider.BEDROCK,
+        max_context_len=200_000, family="claude", alignment_tier="strong",
+        quirks=_NO_TEMP | _THINKING_BUDGET, weights="claude-fable-5-1")
     # -- Amazon Nova (inference-profile ids; Nova family caps output at 10000) --
     BEDROCK_NOVA_MICRO = ModelSpec(             # cheapest text (fast judge candidate)
         "us.amazon.nova-micro-v1:0", Provider.BEDROCK, 0.035, 0.14,

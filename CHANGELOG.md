@@ -3,6 +3,21 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v5.5.0 — 2026-09-01
+
+Registry-only, additive (the ship-model workflow's registry step, Fable 5 → Fable 5.1).
+
+**Added:**
+
+- **`CLAUDE_FABLE_5_1`** — `claude-fable-5-1` on `ANTHROPIC`, Fable 5's successor in the
+  same tier at the same per-token price ($10/$50; cache reads cut to $0.25/MTok), 1M
+  context, always-on thinking, 30-day retention required. Same quirk set as Fable 5.
+  Breaking API changes vs Fable 5 (noted on the row): forced `tool_choice` returns 400;
+  thinking blocks bind to the producing model; edited history invalidates thinking
+  blocks. `weights="claude-fable-5-1"`.
+- **`BEDROCK_CLAUDE_FABLE_5_1`** — `us.anthropic.claude-fable-5-1`, the Bedrock twin
+  (price UNTRACKED like `BEDROCK_CLAUDE_FABLE_5`); the twin-quirk test covers the pair.
+
 ## v5.4.0 — 2026-08-08
 
 Registry-only, additive.
