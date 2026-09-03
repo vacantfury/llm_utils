@@ -3,6 +3,22 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v5.5.1 — 2026-09-02
+
+Documentation-only; no code or seam change.
+
+**Deprecated:**
+
+- **`cluster_server_manager` / `ClusterModelServerManager`** is now marked
+  deprecated on this maintenance line. Its canonical home is the `devices`
+  repo (`devices/slurm/server_manager.py`, `from devices import
+  ClusterModelServerManager`); the v6.x line already removed it in v6.0.0.
+  The copy here is FROZEN — it has drifted behind devices (no
+  `MAX_SLURM_TIME_LIMIT` fail-safe wall cap, no `_model_safe_name`, still
+  keyed by `LLMModel` instead of a plain model-id string) and will receive no
+  further fixes. Consumers pinned to 5.x keep working unchanged; migrate to
+  devices at the next pin bump. (Zeus-ratified overlap ruling, 2026-09-02.)
+
 ## v5.5.0 — 2026-09-01
 
 Registry-only, additive (the ship-model workflow's registry step, Fable 5 → Fable 5.1).

@@ -11,6 +11,18 @@ Handles:
 - Zombie prevention: durable on-disk job ledger + atexit/SIGTERM/SIGINT teardown
 - Health-check hysteresis: N consecutive failures to evict; evicted servers
   whose SLURM job still runs are re-probed and re-added on recovery
+
+DEPRECATED (2026-09-02, Zeus-ratified overlap ruling). The canonical home of
+this manager is the `devices` infrastructure repo —
+``devices/slurm/server_manager.py``, exported as
+``from devices import ClusterModelServerManager``. Serving lifecycle is
+compute-dispatch machinery, not LLM-client machinery, so it left the provider
+seam in llm_utils **v6.0.0**; this copy survives only on the v5.x maintenance
+line for consumers still pinned there, and it is frozen — bug fixes and new
+capability land in devices, never here. It has already drifted behind devices
+(no ``MAX_SLURM_TIME_LIMIT`` fail-safe wall cap, no ``_model_safe_name``, still
+keyed by ``LLMModel`` rather than a plain model-id string). New consumers wire
+devices directly; existing ones migrate at their next pin bump.
 """
 import atexit
 import json
