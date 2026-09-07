@@ -39,6 +39,12 @@ the SLURM serving lifecycle moved to the owner's device-management layer in v6.0
 
 ## Dependency protocol (charter §3.7 — the standard for every consumer)
 
+- Before installing dependencies, downloading models, or operating an existing
+  remote deployment, read `text_docs/private/site_notes.md` when available and
+  follow its canonical host-policy references. Verify configured storage/cache
+  paths before invoking installers; public library defaults do not establish a
+  deployment's storage policy. Keep private host details out of public files.
+
 - Consumers declare a **pinned uv git dependency by tag** and import only the public seam
   (the package `__init__` exports):
   `uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v6.0.0"`
