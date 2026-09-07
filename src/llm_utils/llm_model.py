@@ -495,10 +495,7 @@ class LLMModel(Enum):
     PHI_3_MINI   = ModelSpec("microsoft/Phi-3-mini-4k-instruct",         Provider.LOCAL)
     # Dense Qwen3 chat checkpoints, loaded in-process with Transformers.
     # LOCAL describes the serving route, including inside a cluster allocation.
-    QWEN3_0_6B = ModelSpec("Qwen/Qwen3-0.6B", Provider.LOCAL, family="qwen")
-    QWEN3_1_7B = ModelSpec("Qwen/Qwen3-1.7B", Provider.LOCAL, family="qwen")
     QWEN3_4B   = ModelSpec("Qwen/Qwen3-4B",   Provider.LOCAL, family="qwen")
-    QWEN3_8B   = ModelSpec("Qwen/Qwen3-8B",   Provider.LOCAL, family="qwen")
     QWEN3_14B  = ModelSpec("Qwen/Qwen3-14B",  Provider.LOCAL, family="qwen")
     QWEN3_32B  = ModelSpec("Qwen/Qwen3-32B",  Provider.LOCAL, family="qwen")
 

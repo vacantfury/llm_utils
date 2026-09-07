@@ -141,7 +141,7 @@ Install the optional `local` dependencies to load models in the caller's process
 from llm_utils import LLMModel, LLMServiceFactory, is_mechanism_error
 
 service = LLMServiceFactory.create(
-    LLMModel.QWEN3_0_6B,  # also accepts "Qwen/Qwen3-0.6B"
+    LLMModel.QWEN3_4B,  # also accepts "Qwen/Qwen3-4B"
     device="cuda",
     torch_dtype="bfloat16",  # select a precision supported by your hardware
     local_files_only=True,   # checkpoint must already be cached
@@ -153,11 +153,15 @@ if is_mechanism_error(response):
     raise RuntimeError(response)
 ```
 
-The dense Qwen3 registry entries are `QWEN3_0_6B`, `QWEN3_1_7B`, `QWEN3_4B`,
-`QWEN3_8B`, `QWEN3_14B`, and `QWEN3_32B`. Registering a model does not download
-its weights. Select a checkpoint that fits the available memory. Qwen3 requires
+The dense Qwen3 registry entries are `QWEN3_4B`, `QWEN3_14B`, and `QWEN3_32B`.
+Registering a model does not download its weights. Select a checkpoint that fits
+the available memory. Qwen3 requires
 Transformers >=4.51; the `local` extra includes that floor and Accelerate for CUDA
-device placement. See the [official model card](https://huggingface.co/Qwen/Qwen3-0.6B).
+device placement. See the [official model card](https://huggingface.co/Qwen/Qwen3-4B).
+
+Starting in v7.0.0, the dense Qwen3 0.6B, 1.7B, and 8B entries are removed.
+Their model IDs and enum names raise `ValueError` in `LLMModel.from_string`
+and `LLMServiceFactory.create`. Select a supported model explicitly when upgrading.
 
 `revision`, `cache_dir`, and `local_files_only` configure **both** the model and
 tokenizer loaders. For reproducible runs, set `revision` to the desired commit.

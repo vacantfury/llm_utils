@@ -67,8 +67,7 @@ def hf(monkeypatch):
 
 
 @pytest.mark.parametrize("size,name", [
-    ("0.6B", "QWEN3_0_6B"), ("1.7B", "QWEN3_1_7B"),
-    ("4B", "QWEN3_4B"), ("8B", "QWEN3_8B"),
+    ("4B", "QWEN3_4B"),
     ("14B", "QWEN3_14B"), ("32B", "QWEN3_32B"),
 ])
 def test_dense_qwen3_normal_factory_and_chat(hf, size, name):
@@ -85,6 +84,22 @@ def test_dense_qwen3_normal_factory_and_chat(hf, size, name):
         ("first", [("Reply with ready.", None)]),
     ], batch_size=2) == [("second", "ready"), ("first", "ready")]
     assert service.get_usage()["total"]["inference_count"] == 3
+
+
+@pytest.mark.parametrize("size,name", [
+    ("0.6B", "QWEN3_0_6B"), ("1.7B", "QWEN3_1_7B"),
+    ("8B", "QWEN3_8B"),
+])
+def test_removed_dense_qwen3_models_reject_before_loading(hf, size, name):
+    calls, _ = hf
+    assert not hasattr(LLMModel, name)
+    for model_string in (f"Qwen/Qwen3-{size}", name):
+        with pytest.raises(ValueError, match="Unknown model"):
+            LLMModel.from_string(model_string)
+        with pytest.raises(ValueError, match="Unknown model"):
+            LLMServiceFactory.create(model_string, device="cpu")
+    assert not calls.tokenizer
+    assert not calls.model
 
 
 def test_explicit_load_options_reach_both_hf_loaders(hf):
