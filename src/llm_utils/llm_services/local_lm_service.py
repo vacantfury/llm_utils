@@ -7,6 +7,7 @@ This service runs models locally on your hardware and automatically detects:
 - CPU (fallback)
 """
 import os
+from collections.abc import Mapping
 from typing import List, Tuple, Optional, Any
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
@@ -44,6 +45,12 @@ class LocalLMService(BaseLLMService):
                 - max_tokens (int): Maximum tokens to generate
                 - device (str): Force specific device ('cuda', 'mps', 'cpu')
                                If not specified, auto-detects best available
+                - revision (str): HF revision for both model and tokenizer
+                - cache_dir (str): HF model/tokenizer cache directory
+                - local_files_only (bool): Load only locally cached files
+                - torch_dtype (torch.dtype or str): Override loading precision
+                - chat_template_kwargs (dict): Extra tokenizer template options;
+                  also accepted per chat/batch_chat call (call values win)
         """
         super().__init__(
             max_concurrency=kwargs.pop("max_concurrency", 20),
@@ -55,6 +62,13 @@ class LocalLMService(BaseLLMService):
         self.temperature = kwargs.get('temperature', 0.0)
         self.max_tokens = kwargs.get('max_tokens', 4096)
         self.top_p = kwargs.get('top_p', 1.0)
+        self.pretrained_kwargs = {
+            key: kwargs[key] for key in ("revision", "cache_dir", "local_files_only")
+            if key in kwargs
+        }
+        self.torch_dtype = kwargs.get("torch_dtype")
+        self.chat_template_kwargs = self._validate_chat_template_kwargs(
+            kwargs.get("chat_template_kwargs"))
 
         # Import required libraries
         try:
@@ -67,7 +81,7 @@ class LocalLMService(BaseLLMService):
         except ImportError:
             raise ImportError(
                 "Required packages not installed. Install with: "
-                "pip install torch transformers"
+                "pip install 'llm_utils[local]'"
             )
 
         # Detect or set device
@@ -97,11 +111,12 @@ class LocalLMService(BaseLLMService):
         # time — not import time — so a token exported after `import llm_utils`
         # still works; HF_TOKEN is the library's own conventional name.
         hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+        load_kwargs = {"token": hf_token, **self.pretrained_kwargs}
 
         # Load tokenizer
         self.tokenizer = self.AutoTokenizer.from_pretrained(
             model_id,
-            token=hf_token
+            **load_kwargs,
         )
 
         # Set pad token if not set
@@ -113,29 +128,16 @@ class LocalLMService(BaseLLMService):
         self.tokenizer.padding_side = 'left'
         logger.info("Set tokenizer padding_side to 'left' for decoder-only model")
 
-        # Load model with appropriate settings
+        # Preserve existing precision defaults unless the caller chooses one.
+        if self.torch_dtype is not None:
+            load_kwargs["torch_dtype"] = self.torch_dtype
+        elif self.device in ("cuda", "mps"):
+            load_kwargs["torch_dtype"] = self.torch.float16
         if self.device == "cuda":
-            # Use float16 for GPU
-            self.model_instance = self.AutoModelForCausalLM.from_pretrained(
-                model_id,
-                torch_dtype=self.torch.float16,
-                device_map="auto",
-                token=hf_token
-            )
-        elif self.device == "mps":
-            # MPS works best with float16
-            self.model_instance = self.AutoModelForCausalLM.from_pretrained(
-                model_id,
-                torch_dtype=self.torch.float16,
-                token=hf_token
-            )
-            self.model_instance = self.model_instance.to(self.device)
-        else:
-            # CPU - use full precision
-            self.model_instance = self.AutoModelForCausalLM.from_pretrained(
-                model_id,
-                token=hf_token
-            )
+            load_kwargs["device_map"] = "auto"
+        self.model_instance = self.AutoModelForCausalLM.from_pretrained(
+            model_id, **load_kwargs)
+        if self.device != "cuda":
             self.model_instance = self.model_instance.to(self.device)
 
         # Create pipeline for easier generation
@@ -157,10 +159,26 @@ class LocalLMService(BaseLLMService):
             **pipeline_kwargs,
         )
 
+    @staticmethod
+    def _validate_chat_template_kwargs(options) -> dict:
+        if options is None:
+            return {}
+        if not isinstance(options, Mapping):
+            raise TypeError("chat_template_kwargs must be a mapping")
+        # The text-generation pipeline requires a rendered string, with its
+        # conversation supplied by the service rather than a template option.
+        reserved = {"tokenize", "return_tensors", "return_dict", "conversation"}
+        conflicts = reserved.intersection(options)
+        if conflicts:
+            raise ValueError(
+                "chat_template_kwargs cannot override " + ", ".join(sorted(conflicts)))
+        return dict(options)
+
     def _render_prompt(
         self,
         conv_data: Tuple[str, List[Tuple[str, Any]]],
         system_message: Optional[str],
+        chat_template_kwargs: Optional[dict] = None,
     ) -> Tuple[str, str]:
         """Render one conversation to the model's prompt string.
 
@@ -180,6 +198,7 @@ class LocalLMService(BaseLLMService):
                     "are ignored")
             texts.append(text)
 
+        template_options = chat_template_kwargs or {}
         if getattr(self.tokenizer, "chat_template", None):
             chat = []
             if system_message:
@@ -187,12 +206,21 @@ class LocalLMService(BaseLLMService):
             chat.extend({"role": "user", "content": t} for t in texts)
             try:
                 prompt = self.tokenizer.apply_chat_template(
-                    chat, tokenize=False, add_generation_prompt=True)
+                    chat, **{"add_generation_prompt": True, **template_options},
+                    tokenize=False)
+                if not isinstance(prompt, str):
+                    raise TypeError("chat template did not return a string")
                 return (conv_id, prompt)
             except Exception as e:  # noqa: BLE001 — fall back to plain join
+                if template_options:
+                    raise ValueError(
+                        "chat template failed with explicit chat_template_kwargs") from e
                 logger.warning(
                     f"apply_chat_template failed ({str(e)[:80]}) — "
                     f"falling back to plain-text prompt")
+        elif template_options:
+            raise ValueError(
+                "chat_template_kwargs requires a tokenizer with a chat template")
 
         parts = ([system_message] if system_message else []) + texts
         return (conv_id, "\n".join(parts))
@@ -229,7 +257,9 @@ class LocalLMService(BaseLLMService):
         Args:
             conversations: List of (id, messages) tuples, where messages is
                 a list of (prompt, image) tuples.
-            **kwargs: Additional parameters (temperature, max_tokens, top_p, batch_size)
+            **kwargs: Additional parameters (temperature, max_tokens, top_p,
+                batch_size, chat_template_kwargs). Explicit template options
+                raise on rendering failure instead of falling back to plain text.
 
         Returns:
             List of (id, response) tuples. On errors, returns (id, mechanism-error string).
@@ -244,7 +274,12 @@ class LocalLMService(BaseLLMService):
             logger.info("MPS device: reducing batch_size to 1 for stability")
             batch_size = 1
 
-        prepared = [self._render_prompt(c, system_message) for c in conversations]
+        template_options = {
+            **self.chat_template_kwargs,
+            **self._validate_chat_template_kwargs(kwargs.get("chat_template_kwargs")),
+        }
+        prepared = [self._render_prompt(c, system_message, template_options)
+                    for c in conversations]
         conv_ids = [cid for cid, _ in prepared]
         formatted_conversations = [conv for _, conv in prepared]
         total_conversations = len(formatted_conversations)

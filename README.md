@@ -131,6 +131,56 @@ Prices differ per route (OpenRouter's aggregated hosts are often cheaper than
 the vendor's own API; self-served rows are $0), so `get_usage()` costs stay
 correct whichever route you pick.
 
+### Local HuggingFace models
+
+Install the optional `local` dependencies to load models in the caller's process
+(CUDA, MPS, or CPU). This includes jobs launched inside a GPU allocation; the
+`LOCAL` provider does not submit jobs or require a model-server manager.
+
+```python
+from llm_utils import LLMModel, LLMServiceFactory, is_mechanism_error
+
+service = LLMServiceFactory.create(
+    LLMModel.QWEN3_0_6B,  # also accepts "Qwen/Qwen3-0.6B"
+    device="cuda",
+    torch_dtype="bfloat16",  # select a precision supported by your hardware
+    local_files_only=True,   # checkpoint must already be cached
+    max_tokens=128,
+    chat_template_kwargs={"enable_thinking": False},
+)
+response = service.chat("Give a short definition of a prime number.")
+if is_mechanism_error(response):
+    raise RuntimeError(response)
+```
+
+The dense Qwen3 registry entries are `QWEN3_0_6B`, `QWEN3_1_7B`, `QWEN3_4B`,
+`QWEN3_8B`, `QWEN3_14B`, and `QWEN3_32B`. Registering a model does not download
+its weights. Select a checkpoint that fits the available memory. Qwen3 requires
+Transformers >=4.51; the `local` extra includes that floor and Accelerate for CUDA
+device placement. See the [official model card](https://huggingface.co/Qwen/Qwen3-0.6B).
+
+`revision`, `cache_dir`, and `local_files_only` configure **both** the model and
+tokenizer loaders. For reproducible runs, set `revision` to the desired commit.
+`torch_dtype` overrides loading precision; leaving it unset preserves the existing
+CUDA/MPS float16 default and the CPU loader's default. `chat_template_kwargs`
+passes options to the tokenizer template. Call-level options merge over the
+constructor defaults without changing later calls:
+
+```python
+responses = service.batch_chat(
+    [("a", [("Explain why 7 is prime.", None)])],
+    chat_template_kwargs={"enable_thinking": True},
+    max_tokens=512,
+)
+```
+
+The model's template defaults apply when no option is supplied; the library does
+not choose or strip a model's thinking output. Explicit template options raise
+`ValueError` if the template is missing or fails, rather than silently changing
+the prompt format. `tokenize`, `return_tensors`, `return_dict`, and `conversation`
+are reserved because this service renders strings for its text-generation
+pipeline. The local service is text-only; image inputs are ignored with a warning.
+
 ### Structured output
 
 `chat_structured` returns a validated pydantic instance via the provider's

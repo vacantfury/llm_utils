@@ -1,6 +1,6 @@
 [project]
 name = "llm_utils"
-version = "6.3.0"
+version = "6.4.0"
 description = "One interface over LLM providers: OpenAI, Anthropic, Gemini, Bedrock, local HF models, and SLURM-cluster serving."
 readme = "README.md"
 license = "MIT"
@@ -21,7 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 local = [
     "torch>=2.2",
-    "transformers>=4.45",
+    "transformers>=4.51",
+    "accelerate>=0.26",
 ]
 bedrock = [
     "boto3>=1.34",
