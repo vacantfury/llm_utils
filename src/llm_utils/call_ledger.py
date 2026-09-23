@@ -94,58 +94,23 @@ def caller() -> tuple[Optional[str], Optional[str]]:
 def census_id(path: Optional[str]) -> Optional[str]:
     """The census row id covering ``path``: the row naming that exact file,
     else the single directory row containing it; None when unresolved."""
-    if not path:
-        return None
+    return _census_resolve(path).get("launch_point")
+
+
+def _census_resolve(path: Optional[str]) -> dict:
+    """agent_manager's public ``census.resolve`` seam; empty when unavailable."""
     try:
-        from pathlib import Path
-
         from agent_manager import census  # type: ignore[import-not-found]
-        from agent_manager.config import load_config  # type: ignore[import-not-found]
 
-        cfg = load_config()
-        rows = census.load_census(cfg).get("launch_points") or []
-        full = Path(path).resolve()
-        repo = census.repo_for(full, cfg)
-        if repo is None:
-            return None
-        root = _repo_root(repo, full, cfg, census)
-        if root is None:
-            return None
-        hit = {"repo": repo, "path": full.relative_to(root).as_posix()}
-        covering = [r for r in rows if census.covers(r, hit)]
-        exact = [r for r in covering if r.get("path") == hit["path"]]
-        chosen = exact if exact else covering
-        return chosen[0]["id"] if len(chosen) == 1 else None
+        return census.resolve(path) or {}
     except Exception:  # noqa: BLE001 — resolution is best effort
-        return None
-
-
-def _repo_root(repo, full, cfg, census):
-    """The map root of ``repo`` that contains ``full`` (longest match)."""
-    best = None
-    for root, name in census._map_roots(  # noqa: SLF001 — same resolution repo_for uses
-            str(os.path.expanduser(cfg["census"]["oikos_map"])),
-            tuple(cfg["census"]["map_path_fields"])):
-        if name == repo and full.is_relative_to(root):
-            if best is None or len(root.parts) > len(best.parts):
-                best = root
-    return best
+        return {}
 
 
 @functools.lru_cache(maxsize=512)
 def repo_of(path: Optional[str]) -> Optional[str]:
     """The oikos repo containing ``path`` per agent_manager, else None."""
-    if not path or path.startswith("<"):
-        return None
-    try:
-        from pathlib import Path
-
-        from agent_manager import census  # type: ignore[import-not-found]
-        from agent_manager.config import load_config  # type: ignore[import-not-found]
-
-        return census.repo_for(Path(path).resolve(), load_config())
-    except Exception:  # noqa: BLE001 — resolution is best effort
-        return None
+    return _census_resolve(path).get("repo")
 
 
 def launch_point_for(service: Any) -> str:

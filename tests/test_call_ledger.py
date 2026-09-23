@@ -105,20 +105,12 @@ def test_census_resolution_by_file(monkeypatch, tmp_path, fake_ledger, service):
     (repo / "pkg").mkdir(parents=True)
     target = repo / "pkg" / "site.py"
     target.write_text("")
-    census = types.ModuleType("agent_manager.census")
-    census.load_census = lambda cfg: {"launch_points": [
-        {"id": "repo.dir", "repo": "repo", "path": "pkg"},
-        {"id": "repo.site", "repo": "repo", "path": "pkg/site.py"}]}
-    census.repo_for = lambda p, cfg: "repo"
-    census._map_roots = lambda m, f: ((repo.resolve(), "repo"),)
-    census.covers = lambda row, hit: row["repo"] == hit["repo"] and (
-        hit["path"] == row["path"] or hit["path"].startswith(row["path"] + "/"))
-    config = types.ModuleType("agent_manager.config")
-    config.load_config = lambda: {"census": {"oikos_map": "x", "map_path_fields": ["path"]}}
-    monkeypatch.setitem(sys.modules, "agent_manager.census", census)
-    monkeypatch.setitem(sys.modules, "agent_manager.config", config)
-    sys.modules["agent_manager"].census = census
-    assert call_ledger.census_id(str(target)) == "repo.site"
     other = repo / "pkg" / "other.py"
     other.write_text("")
+    census = types.ModuleType("agent_manager.census")
+    rows = {str(target): "repo.site", str(other): "repo.dir"}
+    census.resolve = lambda p: {"repo": "repo", "launch_point": rows.get(str(p))}
+    monkeypatch.setitem(sys.modules, "agent_manager.census", census)
+    sys.modules["agent_manager"].census = census
+    assert call_ledger.census_id(str(target)) == "repo.site"
     assert call_ledger.census_id(str(other)) == "repo.dir"
