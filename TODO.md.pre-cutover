@@ -1,0 +1,88 @@
+# TODO (ordered)
+
+1. Add `BEDROCK_CLAUDE_OPUS_5` registry row once the exact invocable id is
+   verified on the xc box (`aws bedrock list-inference-profiles` — Claude is
+   inference-profile-only, expect a `us.`-prefixed id). Reminder: no own
+   Bedrock account — xc is the only route (owner note 2026-07-24; see
+   text_docs/private/site_notes.md). [when: next xc-box session] [by: system]
+   [~30m] [added: 2026-07-24]
+2. Tune the batch auto-routing defaults from ledger evidence
+   (`batch_threshold_usd=1.0`, chars/4 token estimate, 1k tokens/image — now
+   in `base_llm_service.py`, shared by OpenAI/Claude/Google): once consumers
+   accumulate batch usage, compare the estimator against actual per-job cost
+   in the psyche cost ledger (usage-hook data) and adjust the default
+   threshold/estimator constants. Companion tuning task required by the
+   heuristic-number law. [when: real batch usage accumulated in the ledger]
+   [by: system] [~1h] [added: 2026-07-30]
+   - **Structural sub-item, NOT gated on ledger data (found 2026-08-02 from
+     model_internals_safety):** `_estimate_cost_usd` uses `max_tokens` as the
+     per-request output estimate. That is a sound proxy for non-reasoning
+     models — the guardrail sibling tunes it per model (Llama-Guard 128,
+     HarmBench-cls 32) and gets accurate routing — but it is structurally
+     invalid for REASONING models, where the API forces a generous completion
+     budget to hold hidden reasoning tokens. gpt-5-mini judges at the standard
+     `max_tokens: 16384` estimate ~$3.30/job against a real cost near $0.08:
+     a ~40x bias no `batch_threshold_usd` value can absorb, so tuning the
+     constants cannot fix it. Consequence: every gpt-5-mini judge job in the
+     family silently auto-routes to the native batch API. Harmless where no
+     GPU is held (it is 50% cheaper), but model_internals_safety calls judges
+     synchronously with a model resident on a GPU, where unbounded batch
+     latency is charged to the job's wall-clock allocation — it pins
+     `use_batch_api: false` locally as the fix at its own layer.
+     **Blast radius makes this propose-first, not a drive-by fix:** making the
+     estimate accurate would drop most judge jobs below the $1 threshold and
+     flip llm_guardrail_security's headline ASR judge from batch to realtime,
+     roughly DOUBLING its judge API bill with no visible change. Preferred
+     shape: an explicit `expected_output_tokens` hint on the service seam,
+     defaulting to `max_tokens` so no existing consumer's routing moves;
+     reasoning-model callers pass a real figure. Needs a tag + consumer
+     pin-bumps, so it rides a deliberate release, never an experiment
+     deadline. [by: system] [~2h] [added: 2026-08-02]
+3. Re-verify the two OpenRouter PROMO prices before trusting cost estimates
+   from them: `OR_GLM_5_2` ($0.36/$0.75, "-70%") and `OR_MINIMAX_M3`
+   ($0.24/$0.96, "-60%") are launch discounts on openrouter.ai that will
+   expire; both are marked PROMO in llm_model.py. Also worth adding when
+   needed (verified present on OpenRouter 2026-07-30, deliberately NOT
+   registered yet — no consumer): `tencent/hy3` ($0.1288/$0.5336, 295B MoE
+   Hunyuan flagship — notably cheap for a judge) and
+   `bytedance-seed/seed-2.0-lite` ($0.25/$2.00). [after: 2026-10-01]
+   [by: system] [~30m] [added: 2026-07-30]
+4. Bedrock native batch-inference support (the 50%-priced route exists on
+   Bedrock but BedrockService always runs realtime `converse`) — worth it
+   only if bulk Bedrock jobs become routine and arise-beta credits stop
+   covering them. [idea] [by: system] [~2h] [added: 2026-07-30]
+5. Standardize the empty-output placeholder across providers (currently
+   "" on Claude / "[Empty response]" on Google / "[LLM response filtered out
+   due to: X]" on OpenAI+vLLM) — needs a consumer sweep first: research
+   repos' refusal counting may string-match the current per-provider forms.
+   [idea] [by: system] [~1h] [added: 2026-07-30]
+6. Fill the 17 UNTRACKED Bedrock row prices from the public AWS Bedrock
+   pricing page so cost recording stops logging $0 on them (low value while
+   arise-beta credits absorb real cost; matters if Bedrock use outlives the
+   beta). [idea] [by: system] [~1h] [added: 2026-07-30]
+7. Verify per-provider whether any OpenAI-COMPATIBLE endpoint (Z.AI, DeepSeek,
+   Moonshot) now ships an OpenAI-shaped /v1/batches — the blanket "no batch
+   API" gate forfeits 50% pricing if one exists. Check provider docs, then
+   ungate per-subclass if real. [idea] [by: system] [~30m] [added: 2026-07-30]
+8. LocalLMService logprobs via `generate(output_scores=True)` — HF exposes
+   them natively; implement `batch_chat_with_logprobs` there if a consumer
+   ever needs local logprobs. [idea] [by: system] [~1h] [added: 2026-07-30]
+9. Extra-credential account-status paths: OpenAI org Costs API + Anthropic
+   cost_report (both need ADMIN keys; usage/cost reports, no balance —
+   verified 2026-08-04), xAI management-API prepaid balance (management key
+   + team id). Extend the v5.2.0 seam when a consumer wants them; OpenRouter
+   management-key path already shipped (OPENROUTER_MANAGEMENT_KEY).
+   [idea] [by: system] [~2h] [added: 2026-08-04]
+10. Route-availability seam (devices-dispatcher fan-out, ruling 2026-08-05):
+    expose logical-model → available-routes ("does this model have a Bedrock
+    route?") plus which routes are USABLE in the current environment (keys
+    present, endpoints reachable — e.g. Bedrock creds exist only on the xc
+    box). Pure provider/registry introspection: NO cluster topology, NO
+    device knowledge — the devices repo sits ABOVE llm_utils and records
+    per-device answers in its registry; cluster selection in the provider
+    seam is a layering violation (guardrail TODO 19, verified defect (2):
+    nothing maps a logical model to its routes, so preset model-name typing
+    silently decides routing). MINOR additive seam (alias_group/routes_for
+    shape); tag on ship, consumers bump pins. Consumers: the devices
+    dispatch engine, guardrail dispatch.py migration. [by: system]
+    [mode: dev] [value: A] [sooner-better] [added: 2026-08-05]

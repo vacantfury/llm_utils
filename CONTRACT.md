@@ -1,10 +1,63 @@
-# Changelog
+# llm_utils — consumer contract
 
-All notable changes to the public seam are recorded here. Versioning follows
-semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
+*RENDERED from `contract.yaml` by `psyche.oikos contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
-## [Unreleased]
+- **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
+- **last tag:** v7.0.0 · **pyproject version:** 7.1.0
+- **consume it as:** a pinned git dependency by tag in your `pyproject.toml` (charter §3.7); bump only after reading the changelog section for every tag you skip.
 
+## Public seams
+
+### `python-api` — python-api
+The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). LLMModel members are the model registry; removing a member is a MAJOR change.
+- package `llm_utils` — public = the declared list below
+  - `llm_utils.call_ledger`
+  - `llm_utils.LLMModel`
+  - `llm_utils.Provider`
+  - `llm_utils.ModelQuirk`
+  - `llm_utils.BaseLLMService`
+  - `llm_utils.UsageStats`
+  - `llm_utils.LLMServiceFactory`
+  - `llm_utils.AccountStatus`
+  - `llm_utils.burn_rate`
+  - `llm_utils.days_to_empty`
+  - `llm_utils.is_mechanism_error`
+  - `llm_utils.make_mechanism_error`
+  - `llm_utils.strip_mechanism_error`
+  - `llm_utils.FatalModelError`
+  - `llm_utils.AccountFatalError`
+  - `llm_utils.InvalidCredentialError`
+  - `llm_utils.CreditsExhaustedError`
+  - `llm_utils.OpenAIService`
+  - `llm_utils.DeepSeekService`
+  - `llm_utils.ZAIService`
+  - `llm_utils.XAIService`
+  - `llm_utils.MoonshotService`
+  - `llm_utils.OpenRouterService`
+  - `llm_utils.ClaudeService`
+  - `llm_utils.GoogleService`
+  - `llm_utils.LocalLMService`
+  - `llm_utils.SlurmClusterService`
+  - `llm_utils.BedrockService`
+- declared consumers: psyche, autoflow, auto_research, courier, prospector, ties, personal_trade, personal_passive_asset
+
+## Deprecations
+none
+
+## Consumers (derived from their pyprojects — never hand-listed)
+- autoflow @ v5.2.0
+- courier @ v5.0.0
+- llm_agent_security @ v5.0.0
+- llm_guardrail_security @ v5.4.0
+- llm_guardrail_security_public @ v5.4.0
+- model_internals_safety @ v5.0.0
+- personal_passive_asset @ v5.0.0
+- personal_trade @ v5.0.0
+- prospector @ v7.0.0
+- psyche @ v6.3.0
+- ties @ v5.0.0
+
+## Changelog head (`[Unreleased]`)
 ### v7.1.0 (MINOR: new capability, additive)
 
 **Added:**
