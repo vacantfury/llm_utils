@@ -197,6 +197,9 @@ class BaseLLMService(ABC):
     # UsageStats above die with the process, the hook is how a consumer
     # persists spend. Signature:
     #   hook(model, input_tokens, output_tokens, cost_usd, is_test=..., label=...)
+    # Default when NO hook is installed: if the optional `agent_manager`
+    # package is importable, each call lands one row in its call ledger
+    # (llm_utils.call_ledger.record_call; a hook can chain to it).
     _usage_hook: Optional[Callable[..., None]] = None
     _usage_hook_warned: bool = False
 
@@ -240,6 +243,10 @@ class BaseLLMService(ABC):
         # Free-form accounting tag for the usage hook (set via
         # LLMServiceFactory.create(..., label=...)). None = unlabeled.
         self.usage_label: Optional[str] = None
+        # Call-ledger launch point (set directly or via
+        # LLMServiceFactory.create(..., launch_point=...)). None = resolve
+        # from the calling module (see llm_utils.call_ledger).
+        self.launch_point: Optional[str] = None
 
     def _record_usage(
         self, input_tokens: int, output_tokens: int, cost: float, is_test: bool,
@@ -260,6 +267,13 @@ class BaseLLMService(ABC):
                     logger.warning(
                         f"usage hook failed ({str(e)[:90]}) — "
                         f"calls proceed unrecorded this process")
+        else:
+            try:
+                from .call_ledger import record_call
+                record_call(self, input_tokens, output_tokens, cost,
+                            is_test=is_test, label=self.usage_label)
+            except Exception:  # noqa: BLE001 — accounting never kills a call
+                pass
 
     def _accepts_temperature(self) -> bool:
         """Single source of truth for the temperature quirk across ALL providers.

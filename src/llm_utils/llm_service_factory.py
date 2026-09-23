@@ -154,7 +154,7 @@ class LLMServiceFactory:
 
     @classmethod
     def create(cls, model: Union[str, LLMModel], *, label: Optional[str] = None,
-               **kwargs) -> BaseLLMService:
+               launch_point: Optional[str] = None, **kwargs) -> BaseLLMService:
         """
         Create an LLM service instance for the given model.
 
@@ -167,6 +167,9 @@ class LLMServiceFactory:
             label: Accounting tag for this instance's calls, passed to the
                 usage hook (see ``BaseLLMService.set_usage_hook``) — for the
                 consumer's bookkeeping only, never behavior.
+            launch_point: Call-ledger launch point for this instance's calls
+                (the default usage record, see ``llm_utils.call_ledger``).
+                None = resolved from the calling module.
             **kwargs: Additional arguments passed to the service constructor.
                 These override loader defaults.
                 Common kwargs:
@@ -209,4 +212,6 @@ class LLMServiceFactory:
         service = service_class(model, **merged_kwargs)
         if label:
             service.usage_label = label
+        if launch_point:
+            service.launch_point = launch_point
         return service

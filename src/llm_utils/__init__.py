@@ -29,6 +29,8 @@ from .base_llm_service import (
     strip_mechanism_error,
 )
 from .llm_service_factory import LLMServiceFactory
+# Default durable usage record (optional agent_manager call ledger)
+from . import call_ledger
 from .exceptions import (
     FatalModelError,
     AccountFatalError,
@@ -55,6 +57,8 @@ from .llm_services import (
 
 # Define what's exported
 __all__ = [
+    # Default usage record (call ledger, optional)
+    'call_ledger',
     # Models and enums
     'LLMModel',
     'Provider',

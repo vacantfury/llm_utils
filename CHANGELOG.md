@@ -3,6 +3,24 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v7.1.0 — unreleased (MINOR: new capability, additive)
+
+**Added:**
+
+- **Default usage record to a call ledger.** When no consumer usage hook is
+  installed and the optional `agent_manager` package is importable,
+  `BaseLLMService._record_usage` appends one row per call to its call ledger
+  (surface `llm_api`, host `api`, model id, tokens, cost, `purpose` = the
+  service's `usage_label`). `agent_manager` is NOT a dependency: without it the
+  default is inert. Recording never raises into the caller.
+- **`launch_point`** — a new `BaseLLMService` attribute and
+  `LLMServiceFactory.create(..., launch_point=...)` kwarg naming the call site in
+  the ledger. Unset, it resolves from the calling module: the census row
+  covering that file, else the module's dotted name, else `llm_utils.library`.
+- **`llm_utils.call_ledger`** — the recorder module; `record_call(service,
+  input_tokens, output_tokens, cost, is_test=..., label=...)` lets a consumer
+  that installs its own hook chain to the default row.
+
 ## v6.3.0 — 2026-09-01
 
 Registry-only, additive. The same change as v5.5.0 on the 5.x maintenance line,
