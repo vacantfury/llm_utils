@@ -34,6 +34,13 @@ logger = get_logger(__name__)
 # failure with no per-item results.
 _BATCH_TERMINAL_STATUSES = frozenset({"completed", "failed", "expired", "cancelled"})
 
+# Wall-clock ceiling on ONE realtime request (seconds). The SDK's own timeout
+# is per read, and some endpoints (OpenRouter) keep a slow non-streaming
+# request alive with whitespace, which resets that read timer forever: an
+# intake leg hung 1h40m on one such call (2026-09-23). Matches the SDK's 600s
+# read default; callers tune it with ``call_timeout=``.
+_DEFAULT_CALL_TIMEOUT_S = 600.0
+
 
 class OpenAIService(BaseLLMService):
     """Service for OpenAI models (GPT-4o, GPT-5, etc.).
@@ -78,6 +85,8 @@ class OpenAIService(BaseLLMService):
         # response_format, seed, top_p). Per-call kwargs["api_params"] merges
         # on top of these.
         self.api_params: Dict[str, Any] = kwargs.get("api_params") or {}
+        # Total per-request deadline; expiry is a mechanism error, not a hang.
+        self.call_timeout: float = kwargs.get("call_timeout", _DEFAULT_CALL_TIMEOUT_S)
 
         if self.use_batch_api and self.BASE_URL is not None:
             logger.warning(
@@ -170,7 +179,10 @@ class OpenAIService(BaseLLMService):
             for attempt in range(self.max_retries + 1):
                 try:
                     params = self._build_api_params(messages, temperature, max_tokens, extra)
-                    response = await self.async_client.chat.completions.create(**params)
+                    response = await asyncio.wait_for(
+                        self.async_client.chat.completions.create(**params),
+                        timeout=self.call_timeout,
+                    )
 
                     if hasattr(response, "usage") and response.usage:
                         in_tok = response.usage.prompt_tokens or 0
@@ -425,7 +437,10 @@ class OpenAIService(BaseLLMService):
         params["response_format"] = output_schema
 
         async def _call():
-            return await self.async_client.chat.completions.parse(**params)
+            return await asyncio.wait_for(
+                self.async_client.chat.completions.parse(**params),
+                timeout=self.call_timeout,
+            )
 
         try:
             response = asyncio.run(self._retry_rate_limit_async(

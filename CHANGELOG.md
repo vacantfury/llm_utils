@@ -3,6 +3,18 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+**Added:**
+
+- **`call_timeout`** (seconds, default 600) on `OpenAIService` and every
+  OpenAI-compatible subclass (OpenRouter, DeepSeek, Z.AI, xAI, Moonshot): a
+  wall-clock deadline on ONE realtime request (`chat`/`batch_chat` and
+  `chat_structured`). Expiry returns a mechanism error like any transport
+  failure. Why: the SDK timeout is per read, and OpenRouter keeps a slow
+  non-streaming request alive with whitespace, which reset that timer forever;
+  a personal_trade intake leg hung 1h40m on one call and held its release lock.
+
 ## v7.1.0 — 2026-09-23 (MINOR: new capability, additive)
 
 **Added:**
