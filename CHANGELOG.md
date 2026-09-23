@@ -3,9 +3,7 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
-## [Unreleased]
-
-### v7.1.0 (MINOR: new capability, additive)
+## v7.1.0 — 2026-09-23 (MINOR: new capability, additive)
 
 **Added:**
 
