@@ -20,8 +20,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from openai import AsyncOpenAI, OpenAI
 
 from ..base_llm_service import (
-    BaseLLMService, _backoff_seconds, is_rate_limit_error, make_mechanism_error,
+    BaseLLMService, _backoff_seconds, is_account_fatal_error, is_rate_limit_error,
+    make_mechanism_error,
 )
+from ..call_ledger import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from .. import constants as _constants  # noqa: F401  (side effect: load_dotenv)
 from ..media_utils import encode_image_to_b64
@@ -198,11 +200,11 @@ class OpenAIService(BaseLLMService):
                 except Exception as e:
                     err = str(e)
                     # Account-global failures (invalid key / no credits) can't
-                    # recover mid-run — abort the whole run fast instead of
-                    # retrying every cell. Checked BEFORE the rate-limit branch
-                    # because OpenAI returns `insufficient_quota` as a 429.
-                    self._raise_if_account_fatal(e)
-                    if is_rate_limit_error(e) and attempt < self.max_retries:
+                    # recover mid-run — never retried, they abort the whole run
+                    # below. Excluded BEFORE the rate-limit branch because
+                    # OpenAI returns `insufficient_quota` as a 429.
+                    if (not is_account_fatal_error(e) and is_rate_limit_error(e)
+                            and attempt < self.max_retries):
                         wait = _backoff_seconds(attempt)
                         logger.warning(
                             f"Rate limit hit, retry {attempt + 1}/{self.max_retries} "
@@ -210,6 +212,10 @@ class OpenAIService(BaseLLMService):
                         )
                         await asyncio.sleep(wait)
                         continue
+                    # Final outcome: this call failed (one ledger row), then
+                    # abort (account-fatal / 404) or return a mechanism error.
+                    self._record_failure(e, is_test=is_test)
+                    self._raise_if_account_fatal(e)
                     self._check_fatal_error(e, self.model.model_id)
                     logger.error(f"{self.SERVICE_NAME} API error: {err}")
                     return make_mechanism_error(err)
@@ -274,6 +280,8 @@ class OpenAIService(BaseLLMService):
                 label=f"{self.SERVICE_NAME} batches.create ({self.model.model_id})",
             )
         except Exception as e:
+            # A failed submit is one failed call (no item reached the model).
+            self._record_failure(e)
             # Bad key / empty balance surfaces here at submit time and dooms
             # every request in the run — abort fast, don't fail one task.
             self._raise_if_account_fatal(e)
@@ -327,6 +335,7 @@ class OpenAIService(BaseLLMService):
                 if entry.get("error") or not resp or resp.get("status_code") != 200:
                     detail = entry.get("error") or {
                         "status_code": resp.get("status_code") if resp else None}
+                    self._record_batch_item_failure(detail, is_test)
                     results[cid] = make_mechanism_error(f"batch item error: {detail}")
                     continue
                 body = resp["body"]
@@ -350,11 +359,25 @@ class OpenAIService(BaseLLMService):
             for entry in self._download_jsonl(batch.error_file_id):
                 cid = entry.get("custom_id")
                 if cid and cid not in results:
+                    self._record_batch_item_failure(entry.get("error"), is_test)
                     results[cid] = make_mechanism_error(
                         f"batch item error: {entry.get('error')}")
 
         self._cleanup_batch_files(batch)
         return results
+
+    def _record_batch_item_failure(self, detail: Any, is_test: bool) -> None:
+        """One failed-call row for an errored batch item. The error class is
+        the item's error code (e.g. ``batch_expired``, which counts as a
+        timeout) or ``http_<status>``."""
+        code = None
+        if isinstance(detail, dict):
+            code = detail.get("code") or (
+                f"http_{detail['status_code']}" if detail.get("status_code") else None)
+        code = str(code or "batch_item_error")
+        self._record_failure(
+            code, status=STATUS_TIMEOUT if "expired" in code else None,
+            is_test=is_test)
 
     def _cleanup_batch_files(self, batch) -> None:
         """Best-effort deletion of the batch's input/output/error files —
@@ -390,6 +413,10 @@ class OpenAIService(BaseLLMService):
             batch = self._submit_batch(prepared, temperature, max_tokens, extra)
             batch = self._poll_until_done(batch)
             results_map = self._collect_results(batch, is_test)
+            for cid, _ in prepared:
+                if cid not in results_map:  # e.g. a wholesale-failed batch
+                    self._record_batch_item_failure(
+                        {"code": f"batch_{batch.status}"}, is_test)
             return [
                 (cid, results_map.get(cid, make_mechanism_error(
                     f"missing from batch results (status={batch.status})")))
@@ -448,6 +475,7 @@ class OpenAIService(BaseLLMService):
                 label=f"{self.SERVICE_NAME} completions.parse ({self.model.model_id})",
             ))
         except Exception as e:
+            self._record_failure(e, is_test=is_test)
             self._raise_if_account_fatal(e)
             self._check_fatal_error(e, self.model.model_id)
             raise

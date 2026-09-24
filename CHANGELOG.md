@@ -3,6 +3,41 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+v7.3.0 (MINOR: new capability, additive)
+
+**Added:**
+
+- **Failed calls are recorded.** A call whose final outcome is a failure (an
+  exception, a returned mechanism error, the `call_timeout` deadline, retries
+  exhausted, an account-fatal or model-404 abort, an errored or missing native
+  batch item, a failed batch submit) now records ONE row through a new choke
+  point beside `_record_usage`: `BaseLLMService._record_failure`. The row has
+  zero tokens and zero cost, `status` `error` or `timeout` (a timeout class:
+  `TimeoutError`, SDK `APITimeoutError`, httpx `ReadTimeout`, …; a batch item
+  that expired), and `error_class` (the exception class name, or a batch code
+  such as `batch_errored`, `batch_expired`, `http_500`, `batch_missing`). A
+  rate-limit retry that later succeeds records only its success. In-memory
+  `UsageStats` are unchanged: they count completed calls. Wired into every
+  service: OpenAI and the OpenAI-compatible endpoints, Anthropic, Google,
+  Bedrock, the SLURM cluster route, and local models (final sequential
+  failure only). A batch poll that times out is not recorded: the batch keeps
+  running server-side and its harvest records the real outcome.
+- **`call_ledger.record_call`** gains `status` (default `"ok"`) and
+  `error_class`; it is the default recorder for failures too. New constants
+  `STATUS_OK`, `STATUS_ERROR`, `STATUS_TIMEOUT`.
+- **Usage hooks opt in to failures by signature.** A registered hook is
+  called for a failure only if it declares `status` and `error_class` (or
+  `**kwargs`), read once per hook with `inspect.signature`; it then receives
+  `hook(model, 0, 0, 0.0, is_test=..., label=..., status=..., error_class=...)`.
+  An older hook is never called with keywords it would reject, and a hook
+  error on the failure path never touches the completed-call path. Note: a
+  hook that already takes `**kwargs` starts receiving these zero-cost failure
+  calls; it should skip or mark rows whose `status` is not `ok`.
+- **`is_account_fatal_error`, `is_timeout_error`** helpers in
+  `base_llm_service` (classification only, not exported).
+
 ## v7.2.0 — 2026-09-23 (MINOR: new capability, additive)
 
 **Added:**

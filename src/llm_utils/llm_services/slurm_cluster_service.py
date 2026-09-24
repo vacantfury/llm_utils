@@ -156,6 +156,8 @@ class SlurmClusterService(BaseLLMService):
                         )
                         await asyncio.sleep(wait)
                         continue
+                    # Final outcome: this call failed (one ledger row).
+                    self._record_failure(e, is_test=is_test)
                     # Per-model 404 (a model the server never loaded) →
                     # FatalModelError, same contract as the API services.
                     self._check_fatal_error(e, self.model.model_id)

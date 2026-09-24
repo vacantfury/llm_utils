@@ -9,6 +9,7 @@ trio (``submit_batch_chat`` / ``batch_chat_status`` / ``harvest_batch_chat``)
 """
 
 import asyncio
+import inspect
 import random
 import time
 from abc import ABC, abstractmethod
@@ -108,6 +109,36 @@ def is_credit_exhausted_error(exc: BaseException) -> bool:
     return any(p in err for p in _CREDIT_EXHAUSTED_PATTERNS)
 
 
+def is_account_fatal_error(exc: BaseException) -> bool:
+    """True iff `_raise_if_account_fatal` would abort on this error (bad key
+    or empty balance): such an error is never retried."""
+    return is_credit_exhausted_error(exc) or is_invalid_credential_error(exc)
+
+
+def is_timeout_error(exc: BaseException) -> bool:
+    """Did a deadline expire? Covers the stdlib/asyncio ``TimeoutError`` (the
+    ``call_timeout`` wall-clock deadline) and the SDK/HTTP timeout classes
+    (openai/anthropic ``APITimeoutError``, httpx ``ReadTimeout``, botocore
+    ``ReadTimeoutError``), which do not subclass it but carry the word."""
+    return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
+
+
+def _hook_takes_outcome(hook: Callable[..., None]) -> bool:
+    """Whether a usage hook declares the failure keywords (``status`` and
+    ``error_class``, or ``**kwargs``). Hooks written before v7.3.0 do not, and
+    are never called for a failed call."""
+    try:
+        params = inspect.signature(hook).parameters.values()
+    except (TypeError, ValueError):  # builtins / C callables: assume the old shape
+        return False
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params):
+        return True
+    names = {p.name for p in params
+             if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                           inspect.Parameter.KEYWORD_ONLY)}
+    return {"status", "error_class"} <= names
+
+
 # ---------------------------------------------------------------------------
 # Mechanism-error sentinel
 # ---------------------------------------------------------------------------
@@ -197,11 +228,21 @@ class BaseLLMService(ABC):
     # UsageStats above die with the process, the hook is how a consumer
     # persists spend. Signature:
     #   hook(model, input_tokens, output_tokens, cost_usd, is_test=..., label=...)
+    # A FAILED call (error or timeout, final outcome after retries) goes
+    # through the twin choke point `_record_failure`, which calls the hook with
+    # zero tokens, zero cost, and two more keywords, status= ("error" |
+    # "timeout") and error_class= (the exception class name) — but only when
+    # the hook declares those keywords (or **kwargs); an older hook is never
+    # called for a failure.
     # Default when NO hook is installed: if the optional `agent_manager`
     # package is importable, each call lands one row in its call ledger
     # (llm_utils.call_ledger.record_call; a hook can chain to it).
     _usage_hook: Optional[Callable[..., None]] = None
     _usage_hook_warned: bool = False
+    _failure_hook_warned: bool = False
+    # (hook, takes-failure-keywords) for the hook last inspected: the
+    # signature is read once per registered hook, not once per failure.
+    _failure_hook_shape: Optional[Tuple[Callable[..., None], bool]] = None
 
     @classmethod
     def set_usage_hook(cls, hook: Callable[..., None]) -> None:
@@ -272,6 +313,67 @@ class BaseLLMService(ABC):
                 from .call_ledger import record_call
                 record_call(self, input_tokens, output_tokens, cost,
                             is_test=is_test, label=self.usage_label)
+            except Exception:  # noqa: BLE001 — accounting never kills a call
+                pass
+
+    @classmethod
+    def _hook_takes_failures(cls, hook: Callable[..., None]) -> bool:
+        shape = BaseLLMService._failure_hook_shape
+        if shape is None or shape[0] is not hook:
+            shape = (hook, _hook_takes_outcome(hook))
+            BaseLLMService._failure_hook_shape = shape
+        return shape[1]
+
+    def _record_failure(
+        self,
+        error: Any,
+        *,
+        status: Optional[str] = None,
+        is_test: bool = False,
+    ) -> None:
+        """Record ONE failed call: the final outcome of a request that produced
+        no model output (after any retries; a retry that later succeeds records
+        only its success). The twin of `_record_usage`: zero tokens, zero cost,
+        no change to the in-memory UsageStats (they count completed calls).
+
+        ``error`` is the exception (its class name becomes the error class and
+        a timeout class sets status "timeout"), or an error-class string for
+        failures with no exception (an errored batch item). Never raises.
+        """
+        from .call_ledger import STATUS_ERROR, STATUS_TIMEOUT
+        try:
+            if isinstance(error, BaseException):
+                error_class = type(error).__name__
+                if status is None and is_timeout_error(error):
+                    status = STATUS_TIMEOUT
+            else:
+                error_class = str(error)
+            status = status or STATUS_ERROR
+        except Exception:  # noqa: BLE001 — accounting never kills a call
+            return
+        hook = BaseLLMService._usage_hook
+        if hook is not None:
+            if not BaseLLMService._hook_takes_failures(hook):
+                return
+            try:
+                hook(
+                    getattr(self, "model", None), 0, 0, 0.0,
+                    is_test=is_test, label=self.usage_label,
+                    status=status, error_class=error_class,
+                )
+            except Exception as e:  # noqa: BLE001 — accounting never kills a call
+                if not BaseLLMService._failure_hook_warned:
+                    BaseLLMService._failure_hook_warned = True
+                    logger.warning(
+                        f"usage hook failed on a failed-call record "
+                        f"({str(e)[:90]}) — failed-call rows may be missing "
+                        f"this process")
+        else:
+            try:
+                from .call_ledger import record_call
+                record_call(self, 0, 0, 0.0, is_test=is_test,
+                            label=self.usage_label, status=status,
+                            error_class=error_class)
             except Exception:  # noqa: BLE001 — accounting never kills a call
                 pass
 

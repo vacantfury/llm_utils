@@ -175,3 +175,29 @@ def test_explicit_template_options_never_silently_fall_back(hf, missing):
     with pytest.raises(ValueError, match="template"):
         service.chat("one", chat_template_kwargs={"enable_thinking": False})
     assert not calls.generate
+
+
+def test_failed_generation_records_one_failure_per_conversation(hf):
+    """The batch pass fails, the sequential fallback fails too: each
+    conversation's final outcome is one failed-call record (none for the
+    failed batch pass, which is retried)."""
+    from llm_utils.base_llm_service import BaseLLMService
+
+    seen = []
+
+    def hook(model, i, o, c, *, is_test=False, label=None,
+             status="ok", error_class=None):
+        seen.append((status, error_class, i, o, c))
+
+    def boom(prompts, **kwargs):
+        raise MemoryError("CUDA out of memory")
+
+    service = LLMServiceFactory.create(LLMModel.LLAMA3_2_1B, device="cpu")
+    service.pipeline = boom
+    BaseLLMService.set_usage_hook(hook)
+    try:
+        out = service.batch_chat([("a", [("x", None)]), ("b", [("y", None)])])
+    finally:
+        BaseLLMService.clear_usage_hook()
+    assert [cid for cid, _ in out] == ["a", "b"]
+    assert seen == [("error", "MemoryError", 0, 0, 0.0)] * 2

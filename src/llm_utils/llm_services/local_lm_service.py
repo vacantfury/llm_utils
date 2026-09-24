@@ -366,6 +366,8 @@ class LocalLMService(BaseLLMService):
                     self._record_usage(in_tok, out_tok, 0.0, is_test)
                     done[conv_id] = response_text
                 except Exception as e2:
+                    # Final outcome (the batch pass already failed): one row.
+                    self._record_failure(e2, is_test=is_test)
                     logger.error(
                         f"Generation error for conversation {conv_id}: {str(e2)}")
                     done[conv_id] = make_mechanism_error(str(e2))

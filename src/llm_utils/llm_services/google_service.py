@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover
 import google.genai as genai
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
+from ..call_ledger import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from .._logging import get_logger
 
@@ -158,6 +159,7 @@ class GoogleService(BaseLLMService):
                 label=f"Google generate_content ({self.model.model_id})",
             )
         except Exception as e:  # noqa: BLE001 — same contract as batch path
+            self._record_failure(e, is_test=is_test)
             self._raise_if_account_fatal(e)
             self._check_fatal_error(e, self.model.model_id)
             logger.error(f"Google API error: {e}")
@@ -209,6 +211,8 @@ class GoogleService(BaseLLMService):
                 label=f"Google batches.create ({self.model.model_id})",
             )
         except Exception as e:
+            # A failed submit is one failed call (no item reached the model).
+            self._record_failure(e)
             # Bad key ("API key not valid") / disabled billing surfaces here at
             # submit time and dooms every request — abort fast, don't fail one task.
             self._raise_if_account_fatal(e)
@@ -266,6 +270,10 @@ class GoogleService(BaseLLMService):
             item_ids, inlined[:len(item_ids)]
         ):
             if inline_resp is None:
+                self._record_failure(
+                    "batch_missing",
+                    status=STATUS_TIMEOUT if state == "JOB_STATE_EXPIRED" else None,
+                    is_test=is_test)
                 results.append((item_id, make_mechanism_error(
                     f"missing from batch results (state={state})")))
                 continue
@@ -286,6 +294,7 @@ class GoogleService(BaseLLMService):
                 # instead returns a response with empty text → "[Empty response]"
                 # above, kept as a refusal). So this is a mechanism failure.
                 detail = getattr(inline_resp, "error", None)
+                self._record_failure("batch_item_error", is_test=is_test)
                 text = make_mechanism_error(
                     "no response in batch result"
                     + (f": {detail}" if detail else ""))

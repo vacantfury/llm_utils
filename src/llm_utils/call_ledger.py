@@ -2,9 +2,10 @@
 
 When no consumer usage hook is installed (``BaseLLMService.set_usage_hook``)
 and the optional ``agent_manager`` package is importable, ``_record_usage``
-hands each call to ``record_call`` below, which appends one row to
-agent_manager's call ledger. Without ``agent_manager`` this module is inert:
-llm_utils never depends on it.
+hands each completed call to ``record_call`` below, which appends one row to
+agent_manager's call ledger; ``_record_failure`` hands each failed call to it
+too (status error or timeout, the error class, zero tokens and cost). Without
+``agent_manager`` this module is inert: llm_utils never depends on it.
 
 A consumer that installs its own hook and still wants the ledger row chains to
 ``record_call(service, ...)`` from inside that hook.
@@ -30,6 +31,12 @@ from typing import Any, Optional
 # through this package, and the host literal for direct API callers.
 SURFACE = "llm_api"
 HOST = "api"
+# Call outcome (the ledger's `status` vocabulary): a completed call is ok; a
+# failed one (BaseLLMService._record_failure) is error, or timeout when a
+# deadline expired.
+STATUS_OK = "ok"
+STATUS_ERROR = "error"
+STATUS_TIMEOUT = "timeout"
 # The census row of this package itself: the fallback when no caller is found.
 DEFAULT_LAUNCH_POINT = "llm_utils.library"
 
@@ -131,9 +138,13 @@ def _resolve(service: Any) -> tuple[str, Optional[str]]:
 
 def record_call(service: Any, input_tokens: int, output_tokens: int,
                 cost: float, *, is_test: bool = False,
-                label: Optional[str] = None) -> Optional[dict]:
-    """Append one call-ledger row for a completed call; return the row, or
-    None when agent_manager is absent or recording failed. Never raises."""
+                label: Optional[str] = None, status: str = STATUS_OK,
+                error_class: Optional[str] = None) -> Optional[dict]:
+    """Append one call-ledger row for a call; return the row, or None when
+    agent_manager is absent or recording failed. Never raises.
+
+    A completed call is ``status="ok"``; a failed one passes ``status``
+    ("error" | "timeout") and ``error_class`` with zero tokens and cost."""
     try:
         ledger = _ledger()
         if ledger is None:
@@ -142,12 +153,15 @@ def record_call(service: Any, input_tokens: int, output_tokens: int,
         model_id = getattr(model, "model_id", None) or (str(model) if model is not None else None)
         purpose = label if label is not None else getattr(service, "usage_label", None)
         launch_point, repo = _resolve(service)
-        return ledger.record(
+        fields = dict(
             launch_point=launch_point, surface=SURFACE, host=HOST,
             model=model_id, repo=repo, purpose=purpose,
             input_tokens=int(input_tokens) if input_tokens is not None else None,
             output_tokens=int(output_tokens) if output_tokens is not None else None,
-            cost_usd=float(cost) if cost is not None else None, status="ok",
+            cost_usd=float(cost) if cost is not None else None, status=status,
         )
+        if error_class is not None:  # absent = null in the ledger row
+            fields["error_class"] = error_class
+        return ledger.record(**fields)
     except Exception:  # noqa: BLE001 — recording never breaks the caller
         return None

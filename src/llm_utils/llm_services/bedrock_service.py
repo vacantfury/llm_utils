@@ -22,7 +22,8 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..base_llm_service import (
-    BaseLLMService, _backoff_seconds, is_rate_limit_error, make_mechanism_error,
+    BaseLLMService, _backoff_seconds, is_account_fatal_error, is_rate_limit_error,
+    make_mechanism_error,
 )
 from ..exceptions import FatalModelError, InvalidCredentialError
 from ..llm_model import LLMModel
@@ -205,30 +206,11 @@ class BedrockService(BaseLLMService):
 
                 except Exception as e:
                     err = str(e)
-                    # Fail FAST on an exhausted credit balance / billing quota —
-                    # account-global, never recovers mid-run (Bedrock creds are
-                    # handled by the AWS-specific markers below).
-                    self._raise_if_account_fatal(e)
-                    # Fail FAST on dead creds / no-access — these never recover
-                    # mid-run, so raise once (aborts the whole batch) instead of
-                    # retrying every row into a cryptic MECHANISM_ERROR.
-                    if any(m in err for m in _CREDENTIAL_MARKERS):
-                        raise BedrockCredentialsError(
-                            f"AWS Bedrock credentials are expired/invalid "
-                            f"({self.model.model_id}): {err}\n"
-                            f"Temporary STS credentials expire after a few hours "
-                            f"and are NOT auto-refreshed — re-mint them where the "
-                            f"AWS profile lives, then re-run."
-                        ) from e
-                    if any(m in err for m in _ACCESS_MARKERS):
-                        raise BedrockAccessError(
-                            f"AWS Bedrock model not invocable "
-                            f"({self.model.model_id}): {err}\n"
-                            f"Check the model is enabled in the account and the id "
-                            f"is exactly the invocable id (Claude = us.*-prefixed "
-                            f"inference profile; qwen/deepseek/nova = bare on-demand id)."
-                        ) from e
-                    if is_rate_limit_error(e) and attempt < self.max_retries:
+                    dead_creds = any(m in err for m in _CREDENTIAL_MARKERS)
+                    no_access = any(m in err for m in _ACCESS_MARKERS)
+                    if (not (is_account_fatal_error(e) or dead_creds or no_access)
+                            and is_rate_limit_error(e)
+                            and attempt < self.max_retries):
                         wait = _backoff_seconds(attempt)
                         logger.warning(
                             "Bedrock throttled, retry %d/%d in %.1fs",
@@ -236,6 +218,31 @@ class BedrockService(BaseLLMService):
                         )
                         await asyncio.sleep(wait)
                         continue
+                    # Final outcome: this call failed (one ledger row).
+                    self._record_failure(e, is_test=is_test)
+                    # Fail FAST on an exhausted credit balance / billing quota —
+                    # account-global, never recovers mid-run (Bedrock creds are
+                    # handled by the AWS-specific markers below).
+                    self._raise_if_account_fatal(e)
+                    # Fail FAST on dead creds / no-access — these never recover
+                    # mid-run, so raise once (aborts the whole batch) instead of
+                    # retrying every row into a cryptic MECHANISM_ERROR.
+                    if dead_creds:
+                        raise BedrockCredentialsError(
+                            f"AWS Bedrock credentials are expired/invalid "
+                            f"({self.model.model_id}): {err}\n"
+                            f"Temporary STS credentials expire after a few hours "
+                            f"and are NOT auto-refreshed — re-mint them where the "
+                            f"AWS profile lives, then re-run."
+                        ) from e
+                    if no_access:
+                        raise BedrockAccessError(
+                            f"AWS Bedrock model not invocable "
+                            f"({self.model.model_id}): {err}\n"
+                            f"Check the model is enabled in the account and the id "
+                            f"is exactly the invocable id (Claude = us.*-prefixed "
+                            f"inference profile; qwen/deepseek/nova = bare on-demand id)."
+                        ) from e
                     # Per-model 404 / not-found → FatalModelError (run can
                     # continue on other models), same as the sibling services.
                     self._check_fatal_error(e, self.model.model_id)

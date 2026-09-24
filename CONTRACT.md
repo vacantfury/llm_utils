@@ -3,13 +3,13 @@
 *RENDERED from `contract.yaml` by `psyche.oikos contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
 - **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
-- **last tag:** v7.0.0 · **pyproject version:** 7.1.0
+- **last tag:** v7.2.0 · **pyproject version:** 7.3.0
 - **consume it as:** a pinned git dependency by tag in your `pyproject.toml` (charter §3.7); bump only after reading the changelog section for every tag you skip.
 
 ## Public seams
 
 ### `python-api` — python-api
-The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). LLMModel members are the model registry; removing a member is a MAJOR change.
+The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change.
 - package `llm_utils` — public = the declared list below
   - `llm_utils.call_ledger`
   - `llm_utils.LLMModel`
@@ -45,20 +45,67 @@ The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_poi
 none
 
 ## Consumers (derived from their pyprojects — never hand-listed)
-- autoflow @ v5.2.0
-- courier @ v5.0.0
+- agent_manager @ v7.2.0
+- auto_research @ v7.1.0
+- autoflow @ v7.1.0
+- courier @ v7.1.0
 - llm_agent_security @ v5.0.0
 - llm_guardrail_security @ v5.4.0
 - llm_guardrail_security_public @ v5.4.0
 - model_internals_safety @ v5.0.0
-- personal_passive_asset @ v5.0.0
-- personal_trade @ v5.0.0
-- prospector @ v7.0.0
+- personal_passive_asset @ v7.1.0
+- personal_trade @ v7.2.0
+- prospector @ v7.1.0
 - psyche @ v6.3.0
-- ties @ v5.0.0
+- ties @ v7.1.0
 
 ## Changelog head (`[Unreleased]`)
-### v7.1.0 (MINOR: new capability, additive)
+v7.3.0 (MINOR: new capability, additive)
+
+**Added:**
+
+- **Failed calls are recorded.** A call whose final outcome is a failure (an
+  exception, a returned mechanism error, the `call_timeout` deadline, retries
+  exhausted, an account-fatal or model-404 abort, an errored or missing native
+  batch item, a failed batch submit) now records ONE row through a new choke
+  point beside `_record_usage`: `BaseLLMService._record_failure`. The row has
+  zero tokens and zero cost, `status` `error` or `timeout` (a timeout class:
+  `TimeoutError`, SDK `APITimeoutError`, httpx `ReadTimeout`, …; a batch item
+  that expired), and `error_class` (the exception class name, or a batch code
+  such as `batch_errored`, `batch_expired`, `http_500`, `batch_missing`). A
+  rate-limit retry that later succeeds records only its success. In-memory
+  `UsageStats` are unchanged: they count completed calls. Wired into every
+  service: OpenAI and the OpenAI-compatible endpoints, Anthropic, Google,
+  Bedrock, the SLURM cluster route, and local models (final sequential
+  failure only). A batch poll that times out is not recorded: the batch keeps
+  running server-side and its harvest records the real outcome.
+- **`call_ledger.record_call`** gains `status` (default `"ok"`) and
+  `error_class`; it is the default recorder for failures too. New constants
+  `STATUS_OK`, `STATUS_ERROR`, `STATUS_TIMEOUT`.
+- **Usage hooks opt in to failures by signature.** A registered hook is
+  called for a failure only if it declares `status` and `error_class` (or
+  `**kwargs`), read once per hook with `inspect.signature`; it then receives
+  `hook(model, 0, 0, 0.0, is_test=..., label=..., status=..., error_class=...)`.
+  An older hook is never called with keywords it would reject, and a hook
+  error on the failure path never touches the completed-call path. Note: a
+  hook that already takes `**kwargs` starts receiving these zero-cost failure
+  calls; it should skip or mark rows whose `status` is not `ok`.
+- **`is_account_fatal_error`, `is_timeout_error`** helpers in
+  `base_llm_service` (classification only, not exported).
+
+## v7.2.0 — 2026-09-23 (MINOR: new capability, additive)
+
+**Added:**
+
+- **`call_timeout`** (seconds, default 600) on `OpenAIService` and every
+  OpenAI-compatible subclass (OpenRouter, DeepSeek, Z.AI, xAI, Moonshot): a
+  wall-clock deadline on ONE realtime request (`chat`/`batch_chat` and
+  `chat_structured`). Expiry returns a mechanism error like any transport
+  failure. Why: the SDK timeout is per read, and OpenRouter keeps a slow
+  non-streaming request alive with whitespace, which reset that timer forever;
+  a personal_trade intake leg hung 1h40m on one call and held its release lock.
+
+## v7.1.0 — 2026-09-23 (MINOR: new capability, additive)
 
 **Added:**
 

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from anthropic import Anthropic
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
+from ..call_ledger import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger
@@ -184,6 +185,7 @@ class ClaudeService(BaseLLMService):
                 label=f"Anthropic messages.create ({self.model.model_id})",
             )
         except Exception as e:  # noqa: BLE001 — same contract as batch path
+            self._record_failure(e, is_test=is_test)
             self._raise_if_account_fatal(e)
             self._check_fatal_error(e, self.model.model_id)
             logger.error(f"Claude API error: {e}")
@@ -223,6 +225,8 @@ class ClaudeService(BaseLLMService):
                 label=f"Anthropic batches.create ({self.model.model_id})",
             )
         except Exception as e:
+            # A failed submit is one failed call (no item reached the model).
+            self._record_failure(e)
             # Bad key / empty credit balance surfaces here at submit time and
             # dooms every request in the run — abort fast, don't fail one task.
             self._raise_if_account_fatal(e)
@@ -284,6 +288,11 @@ class ClaudeService(BaseLLMService):
                 # expired / canceled). Content refusals come back as
                 # type="succeeded" with refusal text, so this is a mechanism error.
                 detail = getattr(result, "error", None)
+                if record_usage:
+                    self._record_failure(
+                        f"batch_{result.type}",
+                        status=STATUS_TIMEOUT if result.type == "expired" else None,
+                        is_test=is_test)
                 results[cid] = make_mechanism_error(
                     f"batch result type={result.type}"
                     + (f": {detail}" if detail else ""))
@@ -343,6 +352,9 @@ class ClaudeService(BaseLLMService):
                 prepared, system_message, temperature, max_tokens, extra)
             batch = self._poll_until_done(batch)
             results_map = self._collect_results(batch, is_test)
+            for cid, _ in prepared:
+                if cid not in results_map:
+                    self._record_failure("batch_missing", is_test=is_test)
         elif prepared:
             logger.info(
                 f"Sending {len(prepared)} realtime requests "
@@ -393,6 +405,7 @@ class ClaudeService(BaseLLMService):
                 label=f"Anthropic messages.parse ({self.model.model_id})",
             )
         except Exception as e:
+            self._record_failure(e, is_test=is_test)
             self._raise_if_account_fatal(e)
             self._check_fatal_error(e, self.model.model_id)
             raise
