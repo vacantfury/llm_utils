@@ -3,7 +3,9 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
-## v8.2.0 — 2026-09-25 (MINOR: new capability, backward compatible)
+## [Unreleased]
+
+### v8.2.0 (MINOR: new capability, backward compatible)
 
 **Added:** an optional loopback credential-broker mode (`llm_utils.broker`, no extra dependency). When `LLM_UTILS_BROKER_URL` is set to `http://127.0.0.1:<port>`, every provider (OpenAI and the OpenAI-compatible providers, Anthropic, Google, Bedrock through a narrow Converse facade) obtains a short-lived surrogate and a fixed route base URL from the broker and never reads a provider key; SDK retries, environment proxies and redirects are off; batch/file APIs and account-status or management-key lookups raise `BrokerModeUnsupportedError`. Unset: behavior is unchanged. The Claude API opt-in (`LLM_UTILS_ALLOW_CLAUDE_API`) applies in both modes.
 

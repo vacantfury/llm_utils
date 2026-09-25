@@ -3,7 +3,7 @@
 *RENDERED from `contract.yaml` by `psyche.oikos contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
 - **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
-- **last tag:** v7.2.0 · **pyproject version:** 7.3.0
+- **last tag:** v8.1.0 · **pyproject version:** 8.2.0
 - **consume it as:** a pinned git dependency by tag in your `pyproject.toml` (charter §3.7); bump only after reading the changelog section for every tag you skip.
 
 ## Public seams
@@ -45,22 +45,46 @@ The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_poi
 none
 
 ## Consumers (derived from their pyprojects — never hand-listed)
-- agent_manager @ v7.2.0
-- auto_research @ v7.1.0
-- autoflow @ v7.1.0
-- courier @ v7.1.0
+- agent_manager @ v8.1.0
+- auto_research @ v7.3.0
+- autoflow @ v8.1.0
+- courier @ v8.1.0
 - llm_agent_security @ v5.0.0
 - llm_guardrail_security @ v5.4.0
 - llm_guardrail_security_public @ v5.4.0
 - model_internals_safety @ v5.0.0
-- personal_passive_asset @ v7.1.0
-- personal_trade @ v7.2.0
-- prospector @ v7.1.0
-- psyche @ v6.3.0
-- ties @ v7.1.0
+- personal_passive_asset @ v8.1.0
+- personal_trade @ v8.1.0
+- prospector @ v8.1.0
+- psyche @ v8.1.0
 
 ## Changelog head (`[Unreleased]`)
-v7.3.0 (MINOR: new capability, additive)
+### v8.2.0 (MINOR: new capability, backward compatible)
+
+**Added:** an optional loopback credential-broker mode (`llm_utils.broker`, no extra dependency). When `LLM_UTILS_BROKER_URL` is set to `http://127.0.0.1:<port>`, every provider (OpenAI and the OpenAI-compatible providers, Anthropic, Google, Bedrock through a narrow Converse facade) obtains a short-lived surrogate and a fixed route base URL from the broker and never reads a provider key; SDK retries, environment proxies and redirects are off; batch/file APIs and account-status or management-key lookups raise `BrokerModeUnsupportedError`. Unset: behavior is unchanged. The Claude API opt-in (`LLM_UTILS_ALLOW_CLAUDE_API`) applies in both modes.
+
+## v8.1.0 — 2026-09-24 (MINOR: narrower refusal, backward compatible)
+
+**Changed:** the opt-in covers only the Anthropic API itself (provider ANTHROPIC, `ClaudeService`).
+Claude served by Bedrock or by an OpenAI-compatible router is no longer refused: those routes bill
+their own accounts. `BedrockService` construction no longer checks `LLM_UTILS_ALLOW_CLAUDE_API`.
+`is_claude_model()` stays as a helper; the policy no longer uses it.
+
+## v8.0.0 — 2026-09-24 (MAJOR: breaking default)
+
+**Changed (breaking):** paid Claude API calls are opt-in per process. Building a service for a
+Claude-family model on any paid API route (Anthropic direct, Bedrock, an OpenAI-compatible router
+serving Claude) raises `ClaudeAPINotAllowed` unless the process sets `LLM_UTILS_ALLOW_CLAUDE_API=1`.
+The check runs in `LLMServiceFactory.create` and in `ClaudeService` / `BedrockService` construction,
+before any request. Only the exact value `1` opts in.
+
+**Migration:** export `LLM_UTILS_ALLOW_CLAUDE_API=1` in the launchers of the processes that are
+meant to spend on the Claude API; leave it unset everywhere else. Test suites that build Claude
+services set it in a fixture.
+
+**Added:** `ClaudeAPINotAllowed`, `claude_api_allowed()`, `is_claude_model()`, `CLAUDE_API_ALLOW_ENV`.
+
+## v7.3.0 — 2026-09-24 (MINOR: new capability, additive)
 
 **Added:**
 
