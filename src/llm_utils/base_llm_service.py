@@ -115,12 +115,24 @@ def is_account_fatal_error(exc: BaseException) -> bool:
     return is_credit_exhausted_error(exc) or is_invalid_credential_error(exc)
 
 
+# HTTP 504 Gateway Timeout: an upstream deadline expired.
+_GATEWAY_TIMEOUT = 504
+
+
 def is_timeout_error(exc: BaseException) -> bool:
     """Did a deadline expire? Covers the stdlib/asyncio ``TimeoutError`` (the
-    ``call_timeout`` wall-clock deadline) and the SDK/HTTP timeout classes
+    ``call_timeout`` wall-clock deadline), the SDK/HTTP timeout classes
     (openai/anthropic ``APITimeoutError``, httpx ``ReadTimeout``, botocore
-    ``ReadTimeoutError``), which do not subclass it but carry the word."""
-    return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
+    ``ReadTimeoutError``, Google ``DeadlineExceeded``), which do not subclass
+    it but carry the word, and an HTTP 504 read from the exception's integer
+    status (``status_code`` on openai/anthropic, ``code`` on google-genai)."""
+    if isinstance(exc, TimeoutError):
+        return True
+    name = type(exc).__name__.lower()
+    if "timeout" in name or "deadline" in name:
+        return True
+    return any(getattr(exc, attr, None) == _GATEWAY_TIMEOUT
+               for attr in ("status_code", "code"))
 
 
 def _hook_takes_outcome(hook: Callable[..., None]) -> bool:
@@ -340,8 +352,8 @@ class BaseLLMService(ABC):
         a timeout class sets status "timeout"), or an error-class string for
         failures with no exception (an errored batch item). Never raises.
         """
-        from .call_ledger import STATUS_ERROR, STATUS_TIMEOUT
         try:
+            from .call_ledger import STATUS_ERROR, STATUS_TIMEOUT
             if isinstance(error, BaseException):
                 error_class = type(error).__name__
                 if status is None and is_timeout_error(error):
@@ -353,7 +365,11 @@ class BaseLLMService(ABC):
             return
         hook = BaseLLMService._usage_hook
         if hook is not None:
-            if not BaseLLMService._hook_takes_failures(hook):
+            try:
+                takes_failures = BaseLLMService._hook_takes_failures(hook)
+            except Exception:  # noqa: BLE001 — an unreadable shape = the old shape
+                takes_failures = False
+            if not takes_failures:
                 return
             try:
                 hook(

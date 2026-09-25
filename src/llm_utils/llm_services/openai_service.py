@@ -102,6 +102,10 @@ class OpenAIService(BaseLLMService):
         # Sync client for the blocking batch flow (files + batches endpoints);
         # created lazily so realtime-only use never builds it.
         self._sync_client: Optional[OpenAI] = None
+        # Batch ids whose outcome rows this process has already recorded —
+        # guards harvest_batch_chat against recording the same batch twice
+        # (same guard as ClaudeService).
+        self._usage_recorded_batches: set = set()
         logger.info(f"Initialized {self.SERVICE_NAME} service with {model.model_id}")
 
     # ------------------------------------------------------------------
@@ -185,18 +189,6 @@ class OpenAIService(BaseLLMService):
                         self.async_client.chat.completions.create(**params),
                         timeout=self.call_timeout,
                     )
-
-                    if hasattr(response, "usage") and response.usage:
-                        in_tok = response.usage.prompt_tokens or 0
-                        out_tok = response.usage.completion_tokens or 0
-                        cost = (
-                            in_tok * self.model.input_price
-                            + out_tok * self.model.output_price
-                        ) / 1_000_000
-                        self._record_usage(in_tok, out_tok, cost, is_test)
-
-                    return self._extract_response(response)
-
                 except Exception as e:
                     err = str(e)
                     # Account-global failures (invalid key / no credits) can't
@@ -219,6 +211,20 @@ class OpenAIService(BaseLLMService):
                     self._check_fatal_error(e, self.model.model_id)
                     logger.error(f"{self.SERVICE_NAME} API error: {err}")
                     return make_mechanism_error(err)
+                # The call completed and is billed: record it once, and keep a
+                # malformed body (e.g. no choices) out of the failure path.
+                if hasattr(response, "usage") and response.usage:
+                    in_tok = response.usage.prompt_tokens or 0
+                    out_tok = response.usage.completion_tokens or 0
+                    cost = (
+                        in_tok * self.model.input_price
+                        + out_tok * self.model.output_price
+                    ) / 1_000_000
+                    self._record_usage(in_tok, out_tok, cost, is_test)
+                try:
+                    return self._extract_response(response)
+                except Exception as e:  # noqa: BLE001 — per-item contract
+                    return make_mechanism_error(f"response parse error: {e}")
         return make_mechanism_error("retries exhausted (unreachable)")
 
     # ------------------------------------------------------------------
@@ -315,9 +321,13 @@ class OpenAIService(BaseLLMService):
         )
         return [json.loads(line) for line in content.text.splitlines() if line.strip()]
 
-    def _collect_results(self, batch, is_test: bool) -> Dict[str, str]:
+    def _collect_results(
+        self, batch, is_test: bool, record_usage: bool = True,
+    ) -> Dict[str, str]:
         """Map custom_id → response text (or mechanism-error string) from a
-        terminal batch; records usage at batch price; deletes the batch's files."""
+        terminal batch; records usage at batch price and one failed-call row
+        per errored item (unless ``record_usage`` is False); deletes the
+        batch's files."""
         results: Dict[str, str] = {}
 
         if batch.status == "failed":
@@ -335,7 +345,8 @@ class OpenAIService(BaseLLMService):
                 if entry.get("error") or not resp or resp.get("status_code") != 200:
                     detail = entry.get("error") or {
                         "status_code": resp.get("status_code") if resp else None}
-                    self._record_batch_item_failure(detail, is_test)
+                    if record_usage:
+                        self._record_batch_item_failure(detail, is_test)
                     results[cid] = make_mechanism_error(f"batch item error: {detail}")
                     continue
                 body = resp["body"]
@@ -347,7 +358,8 @@ class OpenAIService(BaseLLMService):
                     in_tok * self.model.input_price
                     + out_tok * self.model.output_price
                 ) / 1_000_000 * self.BATCH_COST_DISCOUNT
-                self._record_usage(in_tok, out_tok, cost, is_test)
+                if record_usage:
+                    self._record_usage(in_tok, out_tok, cost, is_test)
                 choice = body["choices"][0]
                 text = (choice.get("message") or {}).get("content")
                 if not text or not text.strip():
@@ -359,11 +371,13 @@ class OpenAIService(BaseLLMService):
             for entry in self._download_jsonl(batch.error_file_id):
                 cid = entry.get("custom_id")
                 if cid and cid not in results:
-                    self._record_batch_item_failure(entry.get("error"), is_test)
+                    if record_usage:
+                        self._record_batch_item_failure(entry.get("error"), is_test)
                     results[cid] = make_mechanism_error(
                         f"batch item error: {entry.get('error')}")
 
         self._cleanup_batch_files(batch)
+        self._usage_recorded_batches.add(batch.id)
         return results
 
     def _record_batch_item_failure(self, detail: Any, is_test: bool) -> None:
@@ -539,7 +553,10 @@ class OpenAIService(BaseLLMService):
 
         Failed/expired entries come back as mechanism-error strings (same
         contract as `batch_chat`); usage/cost is recorded at batch price for
-        succeeded entries. A wholesale-failed batch returns []."""
+        succeeded entries. A wholesale-failed batch returns [] and records one
+        failed-call row per submitted request (``request_counts.total``).
+        Outcomes are recorded the FIRST time this process harvests a given
+        batch id only."""
         if self.BASE_URL is not None:
             raise NotImplementedError(
                 f"{self.SERVICE_NAME}: /v1/batches exists only on the real "
@@ -550,5 +567,14 @@ class OpenAIService(BaseLLMService):
         )
         if batch.status not in _BATCH_TERMINAL_STATUSES:
             return None
-        results_map = self._collect_results(batch, is_test)
+        record = batch_id not in self._usage_recorded_batches
+        results_map = self._collect_results(batch, is_test, record_usage=record)
+        if record:
+            # Submitted requests with no result line at all (a wholesale
+            # failed batch): the ids are unknown here, the count is not.
+            counts = getattr(batch, "request_counts", None)
+            total = getattr(counts, "total", None) or 0
+            for _ in range(max(0, total - len(results_map))):
+                self._record_batch_item_failure(
+                    {"code": f"batch_{batch.status}"}, is_test)
         return list(results_map.items())

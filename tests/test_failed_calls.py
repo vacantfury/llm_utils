@@ -36,6 +36,16 @@ def no_backoff(monkeypatch):
     monkeypatch.setattr("llm_utils.base_llm_service.time.sleep", lambda s: None)
 
 
+@pytest.fixture(autouse=True)
+def reset_hook_state():
+    """Class-level hook state never leaks between tests."""
+    yield
+    BaseLLMService.clear_usage_hook()
+    BaseLLMService._usage_hook_warned = False
+    BaseLLMService._failure_hook_warned = False
+    BaseLLMService._failure_hook_shape = None
+
+
 @pytest.fixture()
 def rows(monkeypatch):
     """The fake ledger's rows; no usage hook installed (default recorder)."""
@@ -231,7 +241,7 @@ class TestGoogle:
         results = svc._collect_results(job, ["a", "b"], is_test=False)
         assert all(is_mechanism_error(t) for _, t in results)
         assert [(r["status"], r["error_class"]) for r in rows] == [
-            ("timeout", "batch_missing")] * 2
+            ("timeout", "batch_expired")] * 2
 
 
 # ---------------------------------------------------------------------------
@@ -367,3 +377,180 @@ class TestHooks:
         for _ in range(3):
             svc._record_failure("x")
         assert calls == [hook]
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (2026-09-24): one row per outcome, whole-batch failures,
+# repeat harvests, a recorder that never raises, timeout classification.
+# ---------------------------------------------------------------------------
+
+def _raises(exc):
+    def fn(*_a, **_k):
+        raise exc
+    return fn
+
+
+class TestOneRowPerOutcome:
+    def test_openai_billed_response_without_choices_is_one_ok_row(self, rows):
+        svc = OpenAIService(LLMModel.GPT_5_NANO, max_retries=0, **KEY)
+        empty = SimpleNamespace(choices=[], usage=SimpleNamespace(
+            prompt_tokens=10, completion_tokens=5))
+        _openai_scripted(svc, empty)
+        assert is_mechanism_error(svc.chat("hi"))
+        assert [r["status"] for r in rows] == ["ok"]
+        assert rows[0]["output_tokens"] == 5
+
+    def test_bedrock_billed_response_with_bad_body_is_one_ok_row(self, rows):
+        svc = _bare_bedrock(max_retries=0)
+        svc._converse = lambda *_a: {
+            "usage": {"inputTokens": 3, "outputTokens": 2},
+            "output": {"message": {"content": None}}}
+        assert is_mechanism_error(asyncio.run(_bedrock_one(svc)))
+        assert [r["status"] for r in rows] == ["ok"]
+
+
+class TestSubmitFailures:
+    def test_openai_submit(self, rows):
+        svc = OpenAIService(LLMModel.GPT_5_NANO, max_retries=0, **KEY)
+        svc._sync_client = SimpleNamespace(files=SimpleNamespace(
+            create=_raises(APIConnectionError("reset"))))
+        with pytest.raises(APIConnectionError):
+            svc.submit_batch_chat([("a", [("x", None)])])
+        assert len(rows) == 1
+        _failure(rows[0], "error", "APIConnectionError")
+
+    def test_claude_submit(self, rows):
+        svc = ClaudeService(LLMModel.CLAUDE_SONNET_5, max_retries=0, **KEY)
+        svc.client = SimpleNamespace(messages=SimpleNamespace(batches=SimpleNamespace(
+            create=_raises(APIConnectionError("reset")))))
+        with pytest.raises(APIConnectionError):
+            svc.submit_batch_chat([("a", [("x", None)])])
+        assert len(rows) == 1
+        _failure(rows[0], "error", "APIConnectionError")
+
+    def test_google_submit(self, rows):
+        svc = GoogleService(LLMModel.GEMINI_2_5_FLASH, max_retries=0, **KEY)
+        svc.client = SimpleNamespace(batches=SimpleNamespace(
+            create=_raises(APIConnectionError("reset"))))
+        with pytest.raises(APIConnectionError):
+            svc.submit_batch_chat([("a", [("x", None)])])
+        assert len(rows) == 1
+        _failure(rows[0], "error", "APIConnectionError")
+
+
+class TestStructured:
+    def test_claude_structured_failure_records_then_raises(self, rows):
+        svc = ClaudeService(LLMModel.CLAUDE_SONNET_5, max_retries=0, **KEY)
+        svc.client = SimpleNamespace(messages=SimpleNamespace(
+            parse=_raises(APIConnectionError("reset"))))
+        with pytest.raises(APIConnectionError):
+            svc.chat_structured("hi", output_schema=dict)
+        assert len(rows) == 1
+        _failure(rows[0], "error", "APIConnectionError")
+
+
+def _openai_failed_batch(total=3):
+    return SimpleNamespace(
+        id="bf", status="failed", output_file_id=None, error_file_id=None,
+        input_file_id=None, errors=None,
+        request_counts=SimpleNamespace(total=total, completed=0, failed=total))
+
+
+class TestWholeBatchFailures:
+    def test_openai_batch_chat_missing_ids(self, rows):
+        svc = OpenAIService(LLMModel.GPT_5_NANO, use_batch_api=True, **KEY)
+        batch = _openai_failed_batch(total=2)
+        svc._submit_batch = lambda *a, **k: batch
+        svc._poll_until_done = lambda b: b
+        out = svc.batch_chat([("a", [("x", None)]), ("b", [("y", None)])])
+        assert all(is_mechanism_error(t) for _, t in out)
+        assert [(r["status"], r["error_class"]) for r in rows] == [
+            ("error", "batch_failed")] * 2
+
+    def test_openai_harvest_failed_batch_counts_requests_once(self, rows):
+        svc = OpenAIService(LLMModel.GPT_5_NANO, **KEY)
+        batch = _openai_failed_batch(total=3)
+        svc._sync_client = SimpleNamespace(batches=SimpleNamespace(
+            retrieve=lambda bid: batch))
+        assert svc.harvest_batch_chat("bf") == []
+        assert svc.harvest_batch_chat("bf") == []  # same process: no new rows
+        assert [(r["status"], r["error_class"]) for r in rows] == [
+            ("error", "batch_failed")] * 3
+
+    def _google_job(self, svc, state, *, stats=None, inlined=None):
+        job = SimpleNamespace(
+            name="jobs/1", state=SimpleNamespace(name=state), src=None,
+            completion_stats=stats,
+            dest=SimpleNamespace(inlined_responses=inlined) if inlined else None)
+        svc.client = SimpleNamespace(batches=SimpleNamespace(get=lambda name: job))
+        return job
+
+    def test_google_harvest_failed_job_uses_its_request_count(self, rows):
+        svc = GoogleService(LLMModel.GEMINI_2_5_FLASH, **KEY)
+        self._google_job(svc, "JOB_STATE_FAILED", stats=SimpleNamespace(
+            successful_count=0, failed_count=4, incomplete_count=None))
+        assert svc.harvest_batch_chat("jobs/1") == []
+        assert [(r["status"], r["error_class"]) for r in rows] == [
+            ("error", "batch_failed")] * 4
+
+    def test_google_harvest_expired_job_without_count_records_one_timeout(self, rows):
+        svc = GoogleService(LLMModel.GEMINI_2_5_FLASH, **KEY)
+        self._google_job(svc, "JOB_STATE_EXPIRED")
+        svc.harvest_batch_chat("jobs/1")
+        assert [(r["status"], r["error_class"]) for r in rows] == [
+            ("timeout", "batch_expired")]
+
+    def test_google_repeat_harvest_records_once(self, rows):
+        svc = GoogleService(LLMModel.GEMINI_2_5_FLASH, **KEY)
+        ok = SimpleNamespace(response=SimpleNamespace(
+            text="A", usage_metadata=SimpleNamespace(
+                prompt_token_count=2, candidates_token_count=1,
+                thoughts_token_count=0)))
+        bad = SimpleNamespace(response=None, error={"code": 500})
+        self._google_job(svc, "JOB_STATE_SUCCEEDED", inlined=[ok, bad])
+        first = svc.harvest_batch_chat("jobs/1")
+        second = svc.harvest_batch_chat("jobs/1")
+        assert first == second and first[0] == ("0", "A")
+        assert sorted((r["status"], r.get("error_class")) for r in rows) == [
+            ("error", "batch_item_error"), ("ok", None)]
+
+
+class TestRecorderNeverRaises:
+    def test_shape_check_failure_is_the_old_shape(self, rows, monkeypatch):
+        import llm_utils.base_llm_service as base
+
+        seen = []
+        monkeypatch.setattr(base, "_hook_takes_outcome", _raises(RuntimeError("odd")))
+        BaseLLMService.set_usage_hook(lambda *a, **k: seen.append(k))
+        svc = OpenAIService(LLMModel.GPT_5_NANO, **KEY)
+        svc._record_failure(APIConnectionError("x"))  # must not raise
+        assert seen == []
+
+
+class TestTimeoutClassification:
+    def test_google_deadline_exceeded(self, rows):
+        class DeadlineExceeded(Exception):
+            pass
+
+        svc = OpenAIService(LLMModel.GPT_5_NANO, **KEY)
+        svc._record_failure(DeadlineExceeded("504 Deadline Exceeded"))
+        _failure(rows[0], "timeout", "DeadlineExceeded")
+
+    @pytest.mark.parametrize("attr", ["status_code", "code"])
+    def test_http_504_status(self, rows, attr):
+        class ServerError(Exception):
+            pass
+
+        exc = ServerError("gateway timeout")
+        setattr(exc, attr, 504)
+        svc = OpenAIService(LLMModel.GPT_5_NANO, **KEY)
+        svc._record_failure(exc)
+        _failure(rows[0], "timeout", "ServerError")
+
+    def test_other_status_codes_stay_error(self, rows):
+        class ServerError(Exception):
+            code = 503
+
+        svc = OpenAIService(LLMModel.GPT_5_NANO, **KEY)
+        svc._record_failure(ServerError("unavailable"))
+        _failure(rows[0], "error", "ServerError")

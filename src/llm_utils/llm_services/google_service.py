@@ -77,6 +77,10 @@ class GoogleService(BaseLLMService):
         self.top_p = kwargs.get("top_p", 1.0)
 
         self.client = genai.Client(api_key=self.api_key)
+        # Batch names whose outcome rows this process has already recorded —
+        # guards harvest_batch_chat against recording the same job twice
+        # (same guard as ClaudeService).
+        self._usage_recorded_batches: set = set()
         logger.info(f"Initialized Google service with {model.model_id}")
 
     def _supports_native_batch(self) -> bool:
@@ -244,16 +248,41 @@ class GoogleService(BaseLLMService):
             logger.info(f"Batch {batch_job.name}: {self._job_state(batch_job)}")
         return batch_job
 
+    @staticmethod
+    def _state_class(state: str) -> str:
+        """Batch-level error class: JOB_STATE_FAILED → batch_failed."""
+        return "batch_" + state.lower().removeprefix("job_state_")
+
+    @staticmethod
+    def _request_count(batch_job) -> Optional[int]:
+        """How many requests the job was submitted with: the inlined source
+        when the job object carries it, else the completion stats; None when
+        the API object says neither."""
+        src = getattr(batch_job, "src", None)
+        inlined_src = getattr(src, "inlined_requests", None) if src else None
+        if inlined_src:
+            return len(inlined_src)
+        stats = getattr(batch_job, "completion_stats", None)
+        if stats is not None:
+            counts = [getattr(stats, f, None) for f in
+                      ("successful_count", "failed_count", "incomplete_count")]
+            if any(isinstance(c, int) for c in counts):
+                return sum(c for c in counts if isinstance(c, int))
+        return None
+
     def _collect_results(
         self,
         batch_job,
         item_ids: List[str],
         is_test: bool,
+        record_usage: bool = True,
     ) -> List[Tuple[str, str]]:
         """Zip item ids against the job's inlined responses (Google's inline
         batch carries no custom_id — correspondence is positional). Missing
         responses — count mismatch, or a failed/expired job with no output —
-        become mechanism errors naming the job state, never silent drops."""
+        become mechanism errors naming the job state, never silent drops.
+        Usage and failed-call rows are recorded unless ``record_usage`` is
+        False."""
         state = self._job_state(batch_job)
         if state != "JOB_STATE_SUCCEEDED":
             logger.error(f"Google batch {batch_job.name} ended {state}")
@@ -270,10 +299,12 @@ class GoogleService(BaseLLMService):
             item_ids, inlined[:len(item_ids)]
         ):
             if inline_resp is None:
-                self._record_failure(
-                    "batch_missing",
-                    status=STATUS_TIMEOUT if state == "JOB_STATE_EXPIRED" else None,
-                    is_test=is_test)
+                if record_usage:
+                    self._record_failure(
+                        "batch_missing" if state == "JOB_STATE_SUCCEEDED"
+                        else self._state_class(state),
+                        status=STATUS_TIMEOUT if state == "JOB_STATE_EXPIRED" else None,
+                        is_test=is_test)
                 results.append((item_id, make_mechanism_error(
                     f"missing from batch results (state={state})")))
                 continue
@@ -288,18 +319,21 @@ class GoogleService(BaseLLMService):
                         in_tok * self.model.input_price
                         + out_tok * self.model.output_price
                     ) / 1_000_000 * self.BATCH_COST_DISCOUNT
-                    self._record_usage(in_tok, out_tok, cost, is_test)
+                    if record_usage:
+                        self._record_usage(in_tok, out_tok, cost, is_test)
             else:
                 # No inline response = the item errored (a content/safety block
                 # instead returns a response with empty text → "[Empty response]"
                 # above, kept as a refusal). So this is a mechanism failure.
                 detail = getattr(inline_resp, "error", None)
-                self._record_failure("batch_item_error", is_test=is_test)
+                if record_usage:
+                    self._record_failure("batch_item_error", is_test=is_test)
                 text = make_mechanism_error(
                     "no response in batch result"
                     + (f": {detail}" if detail else ""))
 
             results.append((item_id, text))
+        self._usage_recorded_batches.add(batch_job.name)
         return results
 
     # ------------------------------------------------------------------
@@ -428,7 +462,11 @@ class GoogleService(BaseLLMService):
         inline batch has no custom_id, so keep your own id list from submit
         time and zip by index. Failed entries come back as mechanism-error
         strings; usage/cost is recorded at batch price for succeeded entries
-        on every harvest (no cross-process dedup is possible here)."""
+        and one failed-call row per failed or never-answered request, the
+        FIRST time this process harvests a given job (a harvest from a
+        different process records again). A failed or expired job with no
+        responses records one row per submitted request when the job object
+        reports the count, else ONE row for the whole job."""
         batch_job = self._retry_rate_limit_sync(
             lambda: self.client.batches.get(name=batch_id),
             label=f"Google batches.get ({batch_id})",
@@ -438,4 +476,19 @@ class GoogleService(BaseLLMService):
         dest = getattr(batch_job, "dest", None)
         inlined = (getattr(dest, "inlined_responses", None) or []) if dest else []
         item_ids = [str(i) for i in range(len(inlined))]
-        return self._collect_results(batch_job, item_ids, is_test)
+        record = batch_id not in self._usage_recorded_batches
+        results = self._collect_results(
+            batch_job, item_ids, is_test, record_usage=record)
+        state = self._job_state(batch_job)
+        if record and state != "JOB_STATE_SUCCEEDED":
+            # Requests that never got a response line: the count comes from
+            # the job object; when it reports none, one row for the job.
+            expected = self._request_count(batch_job)
+            unanswered = (max(0, expected - len(inlined)) if expected is not None
+                          else (0 if inlined else 1))
+            for _ in range(unanswered):
+                self._record_failure(
+                    self._state_class(state),
+                    status=STATUS_TIMEOUT if state == "JOB_STATE_EXPIRED" else None,
+                    is_test=is_test)
+        return results

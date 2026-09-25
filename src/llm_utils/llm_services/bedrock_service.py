@@ -194,16 +194,6 @@ class BedrockService(BaseLLMService):
                         self._converse,
                         bedrock_msgs, system_message, temperature, max_tokens,
                     )
-                    usage = response.get("usage") or {}
-                    in_tok = usage.get("inputTokens", 0) or 0
-                    out_tok = usage.get("outputTokens", 0) or 0
-                    cost = (
-                        in_tok * self.model.input_price
-                        + out_tok * self.model.output_price
-                    ) / 1_000_000
-                    self._record_usage(in_tok, out_tok, cost, is_test)
-                    return self._extract_response(response)
-
                 except Exception as e:
                     err = str(e)
                     dead_creds = any(m in err for m in _CREDENTIAL_MARKERS)
@@ -248,6 +238,24 @@ class BedrockService(BaseLLMService):
                     self._check_fatal_error(e, self.model.model_id)
                     logger.error("Bedrock converse error (%s): %s", self.model.model_id, err)
                     return make_mechanism_error(err)
+                # The call completed and is billed: record it once, and keep a
+                # malformed body out of the failure path.
+                try:
+                    usage = response.get("usage") or {}
+                    in_tok = usage.get("inputTokens", 0) or 0
+                    out_tok = usage.get("outputTokens", 0) or 0
+                except Exception:  # noqa: BLE001 — unreadable usage = unrecorded
+                    in_tok = out_tok = None
+                if in_tok is not None:
+                    cost = (
+                        in_tok * self.model.input_price
+                        + out_tok * self.model.output_price
+                    ) / 1_000_000
+                    self._record_usage(in_tok, out_tok, cost, is_test)
+                try:
+                    return self._extract_response(response)
+                except Exception as e:  # noqa: BLE001 — per-item contract
+                    return make_mechanism_error(f"bedrock response parse error: {e}")
         return make_mechanism_error("retries exhausted (unreachable)")
 
     # ------------------------------------------------------------------
