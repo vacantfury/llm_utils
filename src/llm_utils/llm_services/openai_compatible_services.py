@@ -45,6 +45,7 @@ class DeepSeekService(OpenAIService):
     """DeepSeek platform (deepseek-v4-*). Mainland endpoint — no personal data."""
 
     API_KEY_ENV = "DEEPSEEK_API_KEY"
+    BROKER_ROUTE = "deepseek"
     BASE_URL = DEEPSEEK_API_URL
     SERVICE_NAME = "DeepSeek"
     BALANCE_QUERY_VIA = "api_key"
@@ -52,6 +53,7 @@ class DeepSeekService(OpenAIService):
     def _fetch_account_status(self) -> AccountStatus:
         # GET /user/balance (NOT under /v1) — amounts are STRINGS, currency
         # can be CNY or USD (api-docs.deepseek.com/api/get-user-balance).
+        self._require_direct_mode('Account status and management-key lookups')
         payload = _bearer_get(f"{self.BASE_URL}/user/balance", self.api_key)
         infos = payload.get("balance_infos") or []
         first = infos[0] if infos else {}
@@ -71,6 +73,7 @@ class ZAIService(OpenAIService):
     """Z.AI open platform (GLM-*). Mainland endpoint — no personal data."""
 
     API_KEY_ENV = "ZAI_API_KEY"
+    BROKER_ROUTE = "zai"
     BASE_URL = ZAI_API_URL
     SERVICE_NAME = "Z.AI"
     # No balance endpoint in the published API reference (verified 2026-08-04
@@ -84,6 +87,7 @@ class XAIService(OpenAIService):
     """xAI Grok family (grok-*). US jurisdiction, OpenAI-compatible."""
 
     API_KEY_ENV = "XAI_API_KEY"
+    BROKER_ROUTE = "xai"
     BASE_URL = XAI_API_URL
     SERVICE_NAME = "xAI"
     # Balance exists but only on the separate Management API host
@@ -96,6 +100,7 @@ class MoonshotService(OpenAIService):
     """Moonshot Kimi family (kimi-*). Mainland endpoint — no personal data."""
 
     API_KEY_ENV = "MOONSHOT_API_KEY"
+    BROKER_ROUTE = "moonshot"
     BASE_URL = MOONSHOT_API_URL
     SERVICE_NAME = "Moonshot"
     BALANCE_QUERY_VIA = "api_key"
@@ -103,6 +108,7 @@ class MoonshotService(OpenAIService):
     def _fetch_account_status(self) -> AccountStatus:
         # GET /v1/users/me/balance (platform.kimi.ai/docs/api/balance).
         # available_balance = voucher + cash, USD; cash may go negative.
+        self._require_direct_mode('Account status and management-key lookups')
         payload = _bearer_get(f"{self.BASE_URL}/users/me/balance", self.api_key)
         if not payload.get("status", False):
             raise ValueError(
@@ -127,6 +133,7 @@ class OpenRouterService(OpenAIService):
     """
 
     API_KEY_ENV = "OPENROUTER_API_KEY"
+    BROKER_ROUTE = "openrouter"
     BASE_URL = OPENROUTER_API_URL
     SERVICE_NAME = "OpenRouter"
     BALANCE_QUERY_VIA = "api_key"
@@ -138,6 +145,7 @@ class OpenRouterService(OpenAIService):
     MANAGEMENT_KEY_ENV = "OPENROUTER_MANAGEMENT_KEY"
 
     def _fetch_account_status(self) -> AccountStatus:
+        self._require_direct_mode('Account status and management-key lookups')
         mgmt_key = os.getenv(self.MANAGEMENT_KEY_ENV)
         if mgmt_key:
             # openrouter.ai/docs/api/api-reference/credits/get-remaining-credits

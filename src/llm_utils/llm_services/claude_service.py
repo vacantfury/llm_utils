@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from anthropic import Anthropic
+from ..broker import consumer_route, UnsupportedAPI
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
 from ..claude_api_policy import require_claude_api_allowed
@@ -60,7 +61,12 @@ class ClaudeService(BaseLLMService):
         self.model = model
         # Read the env var at construction (not import) so a key exported
         # after `import llm_utils` still works — same timing as OpenAIService.
-        self.api_key = kwargs.get("api_key") or os.getenv("ANTHROPIC_API_KEY")
+        self._broker_route = consumer_route("anthropic", "messages")
+        self.api_key = (self._broker_route.surrogate if self._broker_route is not None
+                        else kwargs.get("api_key") or os.getenv("ANTHROPIC_API_KEY"))
+        if self._broker_route is not None:
+            self.use_batch_api = False
+            self.max_retries = 0
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
         # Extra request params merged verbatim into every API call
@@ -71,7 +77,24 @@ class ClaudeService(BaseLLMService):
         # id is harvested twice in one process.
         self._usage_recorded_batches: set = set()
 
-        if self.api_key:
+        if self._broker_route is not None:
+            # The SDK deliberately skips profile auto-discovery and its env
+            # shadow warnings for subclasses. Only the surrogate is supplied.
+            class BrokerAnthropic(Anthropic):
+                pass
+
+            try:
+                self.client = BrokerAnthropic(
+                    api_key=self.api_key, auth_token="", webhook_key="",
+                    base_url=self._broker_route.base_url, max_retries=0,
+                    http_client=self._broker_route.http_client())
+                self.client.messages.batches = UnsupportedAPI()
+                self.client.beta.files = UnsupportedAPI()
+                self.client.beta.messages.batches = UnsupportedAPI()
+            except Exception:
+                self.close()
+                raise
+        elif self.api_key:
             self.client = Anthropic(api_key=self.api_key)
         else:
             # No explicit key: fall back to the SDK's own credential resolution
@@ -95,7 +118,7 @@ class ClaudeService(BaseLLMService):
         logger.info(f"Initialized Claude service with {model.model_id}")
 
     def _supports_native_batch(self) -> bool:
-        return True
+        return self._broker_route is None
 
     def _output_budget(self, max_tokens: int) -> int:
         """Effective max_tokens: always-thinking models (Opus 5 / Fable 5)
@@ -214,6 +237,7 @@ class ClaudeService(BaseLLMService):
         max_tokens: int,
         extra: Optional[Dict[str, Any]] = None,
     ):
+        self._require_direct_mode('Native batch/file APIs')
         requests = []
         for item_id, messages in prepared:
             params = self._build_request_params(
@@ -236,6 +260,7 @@ class ClaudeService(BaseLLMService):
             raise
 
     def _poll_until_done(self, batch):
+        self._require_direct_mode('Native batch/file APIs')
         elapsed = 0
         while batch.processing_status != "ended":
             if elapsed >= self.batch_timeout:
@@ -261,6 +286,7 @@ class ClaudeService(BaseLLMService):
     def _collect_results(
         self, batch, is_test: bool, record_usage: bool = True,
     ) -> Dict[str, str]:
+        self._require_direct_mode('Native batch/file APIs')
         results: Dict[str, str] = {}
         # Materialize the result stream inside the retry wrapper: the stream
         # is itself a network transfer, and a transient error mid-iteration
@@ -436,6 +462,7 @@ class ClaudeService(BaseLLMService):
     ) -> str:
         """Submit a batch WITHOUT waiting; returns the provider batch id.
         Always uses the native Batches API regardless of job size."""
+        self._require_direct_mode('Native batch/file APIs')
         prepared = [
             (cid, self._format_conversation(msgs))
             for cid, msgs in conversations
@@ -451,6 +478,7 @@ class ClaudeService(BaseLLMService):
 
     def batch_chat_status(self, batch_id: str) -> str:
         """The provider's processing status ("in_progress", "ended", …)."""
+        self._require_direct_mode('Native batch/file APIs')
         batch = self._retry_rate_limit_sync(
             lambda: self.client.messages.batches.retrieve(batch_id),
             label=f"Anthropic batches.retrieve ({batch_id})",
@@ -469,6 +497,7 @@ class ClaudeService(BaseLLMService):
         id; repeat harvests of the same id return results without re-recording.
         (A harvest from a *different* process records again — persist ledger
         state accordingly.)"""
+        self._require_direct_mode('Native batch/file APIs')
         batch = self._retry_rate_limit_sync(
             lambda: self.client.messages.batches.retrieve(batch_id),
             label=f"Anthropic batches.retrieve ({batch_id})",

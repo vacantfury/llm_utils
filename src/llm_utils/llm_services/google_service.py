@@ -66,7 +66,13 @@ class GoogleService(BaseLLMService):
         self.model = model
         # Read the env var at construction (not import) so a key exported
         # after `import llm_utils` still works — same timing as OpenAIService.
-        self.api_key = kwargs.get("api_key") or os.getenv("GOOGLE_API_KEY")
+        from ..broker import consumer_route, BrokerGoogleClient
+        self._broker_route = consumer_route("gemini", "generate")
+        self.api_key = (self._broker_route.surrogate if self._broker_route is not None
+                        else kwargs.get("api_key") or os.getenv("GOOGLE_API_KEY"))
+        if self._broker_route is not None:
+            self.use_batch_api = False
+            self.max_retries = 0
         if not self.api_key:
             raise ValueError(
                 "Google API key not found. Set GOOGLE_API_KEY in .env "
@@ -76,7 +82,15 @@ class GoogleService(BaseLLMService):
         self.max_tokens = kwargs.get("max_tokens", 4096)
         self.top_p = kwargs.get("top_p", 1.0)
 
-        self.client = genai.Client(api_key=self.api_key)
+        if self._broker_route is not None:
+            try:
+                self.client = BrokerGoogleClient(
+                    self._broker_route, timeout=kwargs.get("call_timeout", self.batch_timeout))
+            except Exception:
+                self.close()
+                raise
+        else:
+            self.client = genai.Client(api_key=self.api_key)
         # Batch names whose outcome rows this process has already recorded —
         # guards harvest_batch_chat against recording the same job twice
         # (same guard as ClaudeService).
@@ -84,7 +98,7 @@ class GoogleService(BaseLLMService):
         logger.info(f"Initialized Google service with {model.model_id}")
 
     def _supports_native_batch(self) -> bool:
-        return True
+        return self._broker_route is None
 
     def _output_budget(self, max_tokens: int) -> int:
         """The effective max_output_tokens: thinking models get headroom so
@@ -204,6 +218,7 @@ class GoogleService(BaseLLMService):
         return inline_requests
 
     def _submit_batch(self, inline_requests: list):
+        self._require_direct_mode('Native batch/file APIs')
         logger.info(f"Submitting Google batch with {len(inline_requests)} inline requests")
         try:
             return self._retry_rate_limit_sync(
@@ -232,6 +247,7 @@ class GoogleService(BaseLLMService):
         """Poll to ANY terminal state and return the job — failed / cancelled
         / expired jobs are returned too, so partial results (already billed)
         can be collected instead of thrown away."""
+        self._require_direct_mode('Native batch/file APIs')
         elapsed = 0
         while self._job_state(batch_job) not in _TERMINAL_STATES:
             if elapsed >= self.batch_timeout:
@@ -283,6 +299,7 @@ class GoogleService(BaseLLMService):
         become mechanism errors naming the job state, never silent drops.
         Usage and failed-call rows are recorded unless ``record_usage`` is
         False."""
+        self._require_direct_mode('Native batch/file APIs')
         state = self._job_state(batch_job)
         if state != "JOB_STATE_SUCCEEDED":
             logger.error(f"Google batch {batch_job.name} ended {state}")
@@ -431,6 +448,7 @@ class GoogleService(BaseLLMService):
     ) -> str:
         """Submit a native batch WITHOUT waiting; returns the provider job
         name. Always uses the native Batch API regardless of job size."""
+        self._require_direct_mode('Native batch/file APIs')
         prepared = [
             (cid, self._build_content_parts(msgs))
             for cid, msgs in conversations
@@ -447,6 +465,7 @@ class GoogleService(BaseLLMService):
     def batch_chat_status(self, batch_id: str) -> str:
         """The provider's job state ("JOB_STATE_RUNNING",
         "JOB_STATE_SUCCEEDED", …)."""
+        self._require_direct_mode('Native batch/file APIs')
         batch_job = self._retry_rate_limit_sync(
             lambda: self.client.batches.get(name=batch_id),
             label=f"Google batches.get ({batch_id})",
@@ -467,6 +486,7 @@ class GoogleService(BaseLLMService):
         different process records again). A failed or expired job with no
         responses records one row per submitted request when the job object
         reports the count, else ONE row for the whole job."""
+        self._require_direct_mode('Native batch/file APIs')
         batch_job = self._retry_rate_limit_sync(
             lambda: self.client.batches.get(name=batch_id),
             label=f"Google batches.get ({batch_id})",
