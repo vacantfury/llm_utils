@@ -273,7 +273,7 @@ automatically via `python-dotenv`.
 | Provider | Env var |
 |---|---|
 | OpenAI | `OPENAI_API_KEY` |
-| Anthropic | `ANTHROPIC_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` (and `LLM_UTILS_ALLOW_CLAUDE_API=1`: paid Claude API calls are opt-in per process, since v8.0.0) |
 | Google | `GOOGLE_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Z.AI | `ZAI_API_KEY` |

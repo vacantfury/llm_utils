@@ -3,6 +3,22 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+v8.0.0 (MAJOR: breaking default)
+
+**Changed (breaking):** paid Claude API calls are opt-in per process. Building a service for a
+Claude-family model on any paid API route (Anthropic direct, Bedrock, an OpenAI-compatible router
+serving Claude) raises `ClaudeAPINotAllowed` unless the process sets `LLM_UTILS_ALLOW_CLAUDE_API=1`.
+The check runs in `LLMServiceFactory.create` and in `ClaudeService` / `BedrockService` construction,
+before any request. Only the exact value `1` opts in.
+
+**Migration:** export `LLM_UTILS_ALLOW_CLAUDE_API=1` in the launchers of the processes that are
+meant to spend on the Claude API; leave it unset everywhere else. Test suites that build Claude
+services set it in a fixture.
+
+**Added:** `ClaudeAPINotAllowed`, `claude_api_allowed()`, `is_claude_model()`, `CLAUDE_API_ALLOW_ENV`.
+
 ## v7.3.0 — 2026-09-24 (MINOR: new capability, additive)
 
 **Added:**
