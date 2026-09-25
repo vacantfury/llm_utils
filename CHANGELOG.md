@@ -3,9 +3,7 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
-## [Unreleased]
-
-v8.0.0 (MAJOR: breaking default)
+## v8.0.0 — 2026-09-24 (MAJOR: breaking default)
 
 **Changed (breaking):** paid Claude API calls are opt-in per process. Building a service for a
 Claude-family model on any paid API route (Anthropic direct, Bedrock, an OpenAI-compatible router
