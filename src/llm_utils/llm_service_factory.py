@@ -11,6 +11,7 @@ from typing import Callable, Dict, Optional, Type, Union
 
 from .llm_model import LLMModel, Provider
 from .base_llm_service import BaseLLMService
+from .claude_api_policy import require_claude_api_allowed
 
 # Import concrete service implementations
 from .llm_services import (
@@ -187,6 +188,8 @@ class LLMServiceFactory:
         if isinstance(model, str):
             model = LLMModel.from_string(model)
         
+        require_claude_api_allowed(model)   # paid Claude API is opt-in per process
+
         service_class = cls._PROVIDER_REGISTRY.get(model.provider)
         
         if service_class is None:

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from anthropic import Anthropic
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
+from ..claude_api_policy import require_claude_api_allowed
 from ..call_ledger import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from ..media_utils import encode_image_to_b64
@@ -47,6 +48,7 @@ class ClaudeService(BaseLLMService):
     """Service for Anthropic Claude models."""
 
     def __init__(self, model: LLMModel, **kwargs):
+        require_claude_api_allowed(model)   # paid Claude API is opt-in per process
         super().__init__(
             max_concurrency=kwargs.pop("max_concurrency", 20),
             max_retries=kwargs.pop("max_retries", 5),

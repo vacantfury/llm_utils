@@ -29,6 +29,12 @@ from .base_llm_service import (
     strip_mechanism_error,
 )
 from .llm_service_factory import LLMServiceFactory
+from .claude_api_policy import (
+    ALLOW_ENV as CLAUDE_API_ALLOW_ENV,
+    ClaudeAPINotAllowed,
+    claude_api_allowed,
+    is_claude_model,
+)
 # Default durable usage record (optional agent_manager call ledger)
 from . import call_ledger
 from .exceptions import (
@@ -57,6 +63,10 @@ from .llm_services import (
 
 # Define what's exported
 __all__ = [
+    "CLAUDE_API_ALLOW_ENV",
+    "ClaudeAPINotAllowed",
+    "claude_api_allowed",
+    "is_claude_model",
     # Default usage record (call ledger, optional)
     'call_ledger',
     # Models and enums

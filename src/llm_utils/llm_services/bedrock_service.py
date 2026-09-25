@@ -26,6 +26,7 @@ from ..base_llm_service import (
     make_mechanism_error,
 )
 from ..exceptions import FatalModelError, InvalidCredentialError
+from ..claude_api_policy import require_claude_api_allowed
 from ..llm_model import LLMModel
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger
@@ -77,6 +78,7 @@ class BedrockService(BaseLLMService):
     DEFAULT_REGION = "us-east-1"
 
     def __init__(self, model: LLMModel, **kwargs):
+        require_claude_api_allowed(model)   # paid Claude API is opt-in per process
         super().__init__(
             # Conservative default for accounts with unknown TPM/RPM limits;
             # throttling is retried with backoff. Raise via kwargs if the
