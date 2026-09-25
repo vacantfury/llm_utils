@@ -70,15 +70,30 @@ v7.3.0 (MINOR: new capability, additive)
   batch item, a failed batch submit) now records ONE row through a new choke
   point beside `_record_usage`: `BaseLLMService._record_failure`. The row has
   zero tokens and zero cost, `status` `error` or `timeout` (a timeout class:
-  `TimeoutError`, SDK `APITimeoutError`, httpx `ReadTimeout`, …; a batch item
-  that expired), and `error_class` (the exception class name, or a batch code
-  such as `batch_errored`, `batch_expired`, `http_500`, `batch_missing`). A
-  rate-limit retry that later succeeds records only its success. In-memory
+  `TimeoutError`, SDK `APITimeoutError`, httpx `ReadTimeout`, Google
+  `DeadlineExceeded`, …; an HTTP 504 read from the exception's integer
+  `status_code` or `code`; a batch item or job that expired), and
+  `error_class` (the exception class name, or a batch code such as
+  `batch_errored`, `batch_expired`, `batch_failed`, `http_500`,
+  `batch_item_error`, `batch_missing`). A rate-limit retry that later
+  succeeds records only its success. A billed response whose body cannot be
+  read (e.g. no choices) is ONE ok row plus a mechanism-error return, never a
+  second failure row (OpenAI realtime, Bedrock). In-memory
   `UsageStats` are unchanged: they count completed calls. Wired into every
   service: OpenAI and the OpenAI-compatible endpoints, Anthropic, Google,
   Bedrock, the SLURM cluster route, and local models (final sequential
   failure only). A batch poll that times out is not recorded: the batch keeps
   running server-side and its harvest records the real outcome.
+- **Whole-batch failures on the resumable path.** `harvest_batch_chat` of a
+  wholesale-failed OpenAI batch records one row per submitted request
+  (`request_counts.total`, class `batch_<status>`). A failed, cancelled or
+  expired Google job records one row per request it never answered, counted
+  from the job's inlined source or `completion_stats`; when the job object
+  reports no count, ONE row for the whole job (class `batch_failed` /
+  `batch_expired` / …, expired = timeout).
+- **Repeat harvests record once per process** on OpenAI and Google too (the
+  per-process guard `ClaudeService` already had): a second harvest of the same
+  batch id returns results but writes no completed or failed rows.
 - **`call_ledger.record_call`** gains `status` (default `"ok"`) and
   `error_class`; it is the default recorder for failures too. New constants
   `STATUS_OK`, `STATUS_ERROR`, `STATUS_TIMEOUT`.
@@ -86,8 +101,10 @@ v7.3.0 (MINOR: new capability, additive)
   called for a failure only if it declares `status` and `error_class` (or
   `**kwargs`), read once per hook with `inspect.signature`; it then receives
   `hook(model, 0, 0, 0.0, is_test=..., label=..., status=..., error_class=...)`.
-  An older hook is never called with keywords it would reject, and a hook
-  error on the failure path never touches the completed-call path. Note: a
+  An older hook is never called with keywords it would reject, a hook whose
+  signature cannot be read counts as the older shape, and a hook error on the
+  failure path never touches the completed-call path. `_record_failure`
+  never raises. Note: a
   hook that already takes `**kwargs` starts receiving these zero-cost failure
   calls; it should skip or mark rows whose `status` is not `ok`.
 - **`is_account_fatal_error`, `is_timeout_error`** helpers in
