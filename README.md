@@ -288,6 +288,40 @@ endpoints; OpenRouter is a US aggregator that can route to the same open-weight
 models. This package is transport only — each consumer enforces its own data
 routing policy on top.
 
+### Optional local credential broker
+
+Set `LLM_UTILS_BROKER_URL=http://127.0.0.1:PORT` before constructing a service
+to use a local HTTP credential broker. Only literal `127.0.0.1` HTTP URLs are
+accepted. Unset the variable to retain the normal provider SDK behavior.
+An empty or invalid value fails closed, as does a failed grant request.
+
+The client requests an inference grant with `POST /grants` (`run_id`, `routes`)
+and expects `id`, `surrogate`, `expires` (Unix seconds), `routes`, and
+`base_paths`. Requests go to `/proxy/ROUTE` plus that route's base path.
+`POST /revoke` with the surrogate revokes the grant on service `close()` or
+`aclose()`. Services also support `with` and `async with` for cleanup. Grants
+are never renewed or replayed automatically; construct a new service after
+expiration. Use `aclose()` when deterministic async transport cleanup is needed.
+
+Broker mode covers OpenAI, DeepSeek, Z.AI, xAI, Moonshot, OpenRouter,
+Anthropic, Google and Bedrock. Provider key arguments and environment variables
+are not used. SDK retries, application retries, environment proxies and HTTP
+redirects are disabled. Request hooks pin the destination, strip ambient auth
+and cookies, and attach only the surrogate. Google uses a narrow
+`generate_content` facade because its SDK constructor reads key environment
+variables even with an explicit key. Bedrock uses a Converse facade without
+loading boto3 or entering its authentication chain. Local and SLURM services
+keep their existing behavior.
+
+Automatic batch routing becomes realtime inference. Explicit native batch/file
+operations, account-status queries and management-key lookups raise the exported
+`BrokerModeUnsupportedError`. Broker configuration, grant/control-request failures
+and local route refusals use `BrokerError`; there is no fallback to direct keys.
+Existing provider error handling still applies to SDK inference failures.
+Broker-side policy may refuse
+additional requests, models or modalities. The Anthropic opt-in
+`LLM_UTILS_ALLOW_CLAUDE_API=1` remains required in both modes.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

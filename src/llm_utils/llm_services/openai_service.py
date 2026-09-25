@@ -25,6 +25,7 @@ from ..base_llm_service import (
 )
 from ..call_ledger import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
+from ..broker import consumer_route, UnsupportedAPI
 from .. import constants as _constants  # noqa: F401  (side effect: load_dotenv)
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger
@@ -56,6 +57,7 @@ class OpenAIService(BaseLLMService):
     API_KEY_ENV: str = "OPENAI_API_KEY"       # env var holding the key
     BASE_URL: Optional[str] = None            # None → default OpenAI endpoint
     SERVICE_NAME: str = "OpenAI"              # for logs / error messages
+    BROKER_ROUTE: str = "openai"
     # OpenAI exposes NO balance endpoint to any API key (the old dashboard
     # credit_grants route now demands a browser session token; verified
     # 2026-08-04). The org Costs/Usage APIs exist but need an Admin key —
@@ -75,7 +77,14 @@ class OpenAIService(BaseLLMService):
             batch_threshold_usd=kwargs.pop("batch_threshold_usd", None),
         )
         self.model = model
-        self.api_key = kwargs.get("api_key") or os.getenv(self.API_KEY_ENV)
+        self._broker_route = consumer_route(self.BROKER_ROUTE, "chat")
+        if self._broker_route is not None:
+            self.api_key = self._broker_route.surrogate
+            self.BASE_URL = self._broker_route.base_url
+            self.use_batch_api = False
+            self.max_retries = 0
+        else:
+            self.api_key = kwargs.get("api_key") or os.getenv(self.API_KEY_ENV)
         if not self.api_key:
             raise ValueError(
                 f"{self.SERVICE_NAME} API key not found. Set {self.API_KEY_ENV} "
@@ -98,7 +107,16 @@ class OpenAIService(BaseLLMService):
         client_kwargs = {"api_key": self.api_key}
         if self.BASE_URL:
             client_kwargs["base_url"] = self.BASE_URL
-        self.async_client = AsyncOpenAI(**client_kwargs)
+        try:
+            if self._broker_route is not None:
+                client_kwargs.update(self._broker_client_kwargs(asynchronous=True))
+            self.async_client = AsyncOpenAI(**client_kwargs)
+            if self._broker_route is not None:
+                self.async_client.files = self.async_client.batches = UnsupportedAPI()
+                self.async_client.uploads = UnsupportedAPI()
+        except Exception:
+            self.close()
+            raise
         # Sync client for the blocking batch flow (files + batches endpoints);
         # created lazily so realtime-only use never builds it.
         self._sync_client: Optional[OpenAI] = None
@@ -184,6 +202,7 @@ class OpenAIService(BaseLLMService):
         async with sem:
             for attempt in range(self.max_retries + 1):
                 try:
+                    self._ensure_broker_open()
                     params = self._build_api_params(messages, temperature, max_tokens, extra)
                     response = await asyncio.wait_for(
                         self.async_client.chat.completions.create(**params),
@@ -247,8 +266,18 @@ class OpenAIService(BaseLLMService):
             client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
             if self.BASE_URL:
                 client_kwargs["base_url"] = self.BASE_URL
+            if self._broker_route is not None:
+                client_kwargs.update(self._broker_client_kwargs())
             self._sync_client = OpenAI(**client_kwargs)
+            if self._broker_route is not None:
+                self._sync_client.files = self._sync_client.batches = UnsupportedAPI()
+                self._sync_client.uploads = UnsupportedAPI()
         return self._sync_client
+
+    def _broker_client_kwargs(self, *, asynchronous: bool = False) -> dict:
+        return dict(max_retries=0, admin_api_key="", organization="", project="",
+                    webhook_secret="", http_client=self._broker_route.http_client(
+                        asynchronous=asynchronous))
 
     def _submit_batch(
         self,
@@ -257,6 +286,7 @@ class OpenAIService(BaseLLMService):
         max_tokens: int,
         extra: Optional[Dict[str, Any]] = None,
     ):
+        self._require_direct_mode('Native batch/file APIs')
         lines = []
         for cid, messages in prepared:
             body = self._build_api_params(messages, temperature, max_tokens, extra)
@@ -294,6 +324,7 @@ class OpenAIService(BaseLLMService):
             raise
 
     def _poll_until_done(self, batch):
+        self._require_direct_mode('Native batch/file APIs')
         elapsed = 0
         while batch.status not in _BATCH_TERMINAL_STATUSES:
             if elapsed >= self.batch_timeout:
@@ -315,6 +346,7 @@ class OpenAIService(BaseLLMService):
         return batch
 
     def _download_jsonl(self, file_id: str) -> List[dict]:
+        self._require_direct_mode('Native batch/file APIs')
         content = self._retry_rate_limit_sync(
             lambda: self.sync_client.files.content(file_id),
             label=f"{self.SERVICE_NAME} files.content ({file_id})",
@@ -328,6 +360,7 @@ class OpenAIService(BaseLLMService):
         terminal batch; records usage at batch price and one failed-call row
         per errored item (unless ``record_usage`` is False); deletes the
         batch's files."""
+        self._require_direct_mode('Native batch/file APIs')
         results: Dict[str, str] = {}
 
         if batch.status == "failed":
@@ -517,6 +550,7 @@ class OpenAIService(BaseLLMService):
         **kwargs,
     ) -> str:
         """Submit a native batch WITHOUT waiting; returns the provider batch id."""
+        self._require_direct_mode('Native batch/file APIs')
         if self.BASE_URL is not None:
             raise NotImplementedError(
                 f"{self.SERVICE_NAME}: /v1/batches exists only on the real "
@@ -536,6 +570,7 @@ class OpenAIService(BaseLLMService):
     def batch_chat_status(self, batch_id: str) -> str:
         """The provider's batch status ("validating", "in_progress",
         "completed", "failed", "expired", …)."""
+        self._require_direct_mode('Native batch/file APIs')
         if self.BASE_URL is not None:
             raise NotImplementedError(
                 f"{self.SERVICE_NAME}: /v1/batches exists only on the real "
@@ -557,6 +592,7 @@ class OpenAIService(BaseLLMService):
         failed-call row per submitted request (``request_counts.total``).
         Outcomes are recorded the FIRST time this process harvests a given
         batch id only."""
+        self._require_direct_mode('Native batch/file APIs')
         if self.BASE_URL is not None:
             raise NotImplementedError(
                 f"{self.SERVICE_NAME}: /v1/batches exists only on the real "

@@ -10,8 +10,7 @@ from dotenv import load_dotenv
 # API keys are read as plain environment variables. They can be exported in the
 # shell, injected by a secret manager, or placed in a gitignored `.env` in the
 # CONSUMER's working tree. The upward search from the CWD is our own (not
-# python-dotenv's find_dotenv) because secret managers that mount `.env`
-# without plaintext-on-disk (e.g. 1Password Environments) serve it as a FIFO,
+# python-dotenv's find_dotenv) because some environment providers serve a FIFO,
 # which find_dotenv's isfile() check skips. stat() never opens the file; the
 # actual open happens in load_dotenv and may wait on the manager's unlock —
 # intended. override=False: the real environment always wins.
@@ -33,26 +32,31 @@ def _find_dotenv_upward() -> Optional[str]:
         d = parent
 
 
-_dotenv_path = _find_dotenv_upward()
+_broker_at_import = os.getenv("LLM_UTILS_BROKER_URL") is not None
+_dotenv_path = None if _broker_at_import else _find_dotenv_upward()
 if _dotenv_path:
     load_dotenv(_dotenv_path, override=False)
 
 
 # API Keys (loaded from environment variables)
-OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
-ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
-GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
+def _provider_key(name: str) -> Optional[str]:
+    return None if _broker_at_import else os.getenv(name)
+
+
+OPENAI_API_KEY: Optional[str] = _provider_key("OPENAI_API_KEY")
+ANTHROPIC_API_KEY: Optional[str] = _provider_key("ANTHROPIC_API_KEY")
+GOOGLE_API_KEY: Optional[str] = _provider_key("GOOGLE_API_KEY")
 HUGGINGFACE_TOKEN: Optional[str] = os.getenv("HUGGINGFACE_TOKEN")
 # OpenAI-compatible third-party providers. DeepSeek + Z.AI + Moonshot are
 # DIRECT MAINLAND endpoints — consumers must route ZERO personal data through
 # them (bulk judge/eval work over public data only); see the Provider registry
 # note in llm_model.py. xAI is US jurisdiction; OpenRouter is a US aggregator
 # over hosted open weights.
-DEEPSEEK_API_KEY: Optional[str] = os.getenv("DEEPSEEK_API_KEY")
-ZAI_API_KEY: Optional[str] = os.getenv("ZAI_API_KEY")
-OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY")
-XAI_API_KEY: Optional[str] = os.getenv("XAI_API_KEY")
-MOONSHOT_API_KEY: Optional[str] = os.getenv("MOONSHOT_API_KEY")
+DEEPSEEK_API_KEY: Optional[str] = _provider_key("DEEPSEEK_API_KEY")
+ZAI_API_KEY: Optional[str] = _provider_key("ZAI_API_KEY")
+OPENROUTER_API_KEY: Optional[str] = _provider_key("OPENROUTER_API_KEY")
+XAI_API_KEY: Optional[str] = _provider_key("XAI_API_KEY")
+MOONSHOT_API_KEY: Optional[str] = _provider_key("MOONSHOT_API_KEY")
 
 # API endpoints
 OPENAI_API_URL: Final[str] = "https://api.openai.com/v1"

@@ -47,3 +47,11 @@ class CreditsExhaustedError(AccountFatalError):
     Anthropic "credit balance is too low", DeepSeek "Insufficient Balance",
     or a generic HTTP 402 payment-required. Top up the account and rerun."""
     pass
+
+
+class BrokerError(RuntimeError):
+    """Broker configuration, grant, or transport failed; never fall back to a key."""
+
+
+class BrokerModeUnsupportedError(BrokerError):
+    """This operation is unavailable through the credential broker."""

@@ -42,6 +42,8 @@ from .exceptions import (
     AccountFatalError,
     InvalidCredentialError,
     CreditsExhaustedError,
+    BrokerError,
+    BrokerModeUnsupportedError,
 )
 
 # Concrete service implementations — ALL serving routes are part of the
@@ -94,6 +96,8 @@ __all__ = [
     'AccountFatalError',
     'InvalidCredentialError',
     'CreditsExhaustedError',
+    'BrokerError',
+    'BrokerModeUnsupportedError',
 
     # Concrete services (one per serving route)
     'OpenAIService',
