@@ -3,6 +3,15 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+v8.1.0 (MINOR: narrower refusal, backward compatible)
+
+**Changed:** the opt-in covers only the Anthropic API itself (provider ANTHROPIC, `ClaudeService`).
+Claude served by Bedrock or by an OpenAI-compatible router is no longer refused: those routes bill
+their own accounts. `BedrockService` construction no longer checks `LLM_UTILS_ALLOW_CLAUDE_API`.
+`is_claude_model()` stays as a helper; the policy no longer uses it.
+
 ## v8.0.0 — 2026-09-24 (MAJOR: breaking default)
 
 **Changed (breaking):** paid Claude API calls are opt-in per process. Building a service for a

@@ -1,4 +1,4 @@
-"""Paid Claude API calls are opt-in per process (LLM_UTILS_ALLOW_CLAUDE_API=1)."""
+"""Anthropic API calls are opt-in per process (LLM_UTILS_ALLOW_CLAUDE_API=1); other Claude routes are not covered."""
 import pytest
 
 from llm_utils import ClaudeAPINotAllowed, LLMModel, LLMServiceFactory, is_claude_model
@@ -23,6 +23,13 @@ def test_factory_refuses_claude_without_opt_in(not_allowed):
         LLMServiceFactory.create(LLMModel.CLAUDE_OPUS_5)
     with pytest.raises(ClaudeAPINotAllowed):
         LLMServiceFactory.create("claude-haiku-4-5-20251001")
+
+
+def test_other_claude_routes_are_not_covered(not_allowed):
+    """Bedrock and router-served Claude bill their own accounts: no opt-in needed."""
+    from llm_utils.claude_api_policy import require_claude_api_allowed
+
+    require_claude_api_allowed(LLMModel.BEDROCK_CLAUDE_HAIKU_4_5)   # no raise
 
 
 def test_direct_construction_refuses_claude_without_opt_in(not_allowed):

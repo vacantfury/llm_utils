@@ -1,11 +1,12 @@
-"""Paid Claude API calls are opt-in per process.
+"""Anthropic API calls are opt-in per process.
 
-A Claude-family model on any paid API route (Anthropic direct, Bedrock, or an
-OpenAI-compatible router serving Claude) is refused unless the process sets
-``LLM_UTILS_ALLOW_CLAUDE_API=1``. The deployment decides which processes may
-spend on the Claude API (for example, research runs only) by exporting the
-variable in those launchers; every other process fails closed when the service
-is built, before any request is sent.
+A model served by the Anthropic API itself (provider ANTHROPIC, ``ClaudeService``)
+is refused unless the process sets ``LLM_UTILS_ALLOW_CLAUDE_API=1``. The
+deployment decides which processes may spend on the Anthropic API (for example,
+research runs only) by exporting the variable in those launchers; every other
+process fails closed when the service is built, before any request is sent.
+Claude served by other routes (Bedrock, OpenAI-compatible routers) is not
+covered: those routes bill their own accounts.
 """
 from __future__ import annotations
 
@@ -36,10 +37,10 @@ def claude_api_allowed() -> bool:
 
 
 def require_claude_api_allowed(model) -> None:
-    """Raise ClaudeAPINotAllowed for a Claude-family model unless this process opted in."""
-    if is_claude_model(model) and not claude_api_allowed():
+    """Raise ClaudeAPINotAllowed for an Anthropic API model unless this process opted in."""
+    if getattr(model, "provider", None) == Provider.ANTHROPIC and not claude_api_allowed():
         raise ClaudeAPINotAllowed(
-            f"{getattr(model, 'model_id', model)}: paid Claude API calls are off in this "
+            f"{getattr(model, 'model_id', model)}: Anthropic API calls are off in this "
             f"process. Set {ALLOW_ENV}=1 only in the launchers allowed to spend on the "
             "Claude API; elsewhere run Claude through Claude Code (`claude -p`)."
         )
