@@ -3,9 +3,7 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
-## [Unreleased]
-
-### v9.0.0 (MAJOR: breaking default)
+## v9.0.0 — 2026-09-27 (MAJOR: breaking default)
 
 **Changed (breaking):** paid API calls are capped per process. Every paid entry
 point (`batch_chat`, `chat`, `achat`, `chat_structured`,
