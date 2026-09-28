@@ -82,7 +82,7 @@ The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_poi
 ## Consumers (derived from their pyprojects — never hand-listed)
 - agent_manager @ v8.1.0
 - auto_research @ v7.3.0
-- autoflow @ v8.1.0
+- autoflow @ v8.2.0
 - courier @ v8.2.0
 - llm_agent_security @ v5.0.0
 - llm_guardrail_security @ v8.2.0
@@ -103,7 +103,8 @@ against `spend_cap.max_usd_per_run`, default **$5.00**: recorded spend plus
 in-flight estimates plus unharvested batch estimates plus this call's estimate
 (messages and system prompt as input; per request `expected_output_tokens`,
 else the smaller of the output budget and `spend_cap.assumed_output_tokens`,
-default 1024).
+default 1024; thinking models count their full output budget, headroom
+included).
 Past it the call raises `SpendCapExceededError` (subclass of
 `AccountFatalError`) and nothing is sent. Self-served routes (local, SLURM)
 are never capped or counted.

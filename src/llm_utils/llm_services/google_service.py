@@ -11,6 +11,7 @@ Google Gemini service — two serving routes behind one ``batch_chat``:
 """
 import os
 import time
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from itertools import zip_longest
 from typing import Any, Dict, List, Optional, Tuple
@@ -417,7 +418,10 @@ class GoogleService(BaseLLMService):
                 max_workers=max(1, min(self.max_concurrency, len(prepared)))
             ) as pool:
                 futures = {
+                    # One context copy per task: the run spend cap's
+                    # reservation (llm_utils.spend) follows the call.
                     cid: pool.submit(
+                        contextvars.copy_context().run,
                         self._realtime_one, parts, system_message,
                         temperature, max_tokens, is_test)
                     for cid, parts in prepared

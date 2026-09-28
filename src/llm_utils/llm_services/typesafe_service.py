@@ -50,6 +50,10 @@ logger = get_logger(__name__)
 MAX_CHOICE_OPTIONS = 255     # provider limit
 SCORE_LEVELS = (2, 10)       # provider limits, inclusive
 _RETRY_STATUSES = frozenset({408, 429}) | frozenset(range(500, 600))
+_MAX_RETRY_WAIT_S = 30.0     # a longer Retry-After is not waited out: the error surfaces
+# Only failures before the request reached the server are retried; a read
+# timeout after sending may already have been billed.
+_RETRY_TRANSPORT = (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)
 
 JSONContent = Union[str, Dict[str, Any], list]
 
@@ -253,16 +257,16 @@ class TypeSafeService(BaseLLMService):
         started = time.monotonic()
         try:
             payload = self._post_with_retries(body)
-            answers = {name: _parse_answer(name, raw)
-                       for name, raw in payload["answers"].items()}
-            usage = payload.get("usage") or {}
-            in_tok = int(usage.get("input_tokens") or 0)
-            out_tok = int(usage.get("output_tokens") or 0)
         except Exception as e:
             self._record_failure(e, is_test=is_test)
             raise
+        # Record the billed usage first: a response we cannot parse was still paid for.
+        usage = payload.get("usage") or {}
+        in_tok = int(usage.get("input_tokens") or 0)
+        out_tok = int(usage.get("output_tokens") or 0)
         cost = (in_tok * self.model.input_price + out_tok * self.model.output_price) / 1_000_000
         self._record_usage(in_tok, out_tok, cost, is_test)
+        answers = {name: _parse_answer(name, raw) for name, raw in payload["answers"].items()}
         return Evaluation(str(payload.get("model", self.model.model_id)), answers,
                           in_tok, out_tok, cost, time.monotonic() - started)
 
@@ -280,10 +284,10 @@ class TypeSafeService(BaseLLMService):
         while True:
             try:
                 resp = self._client.post(url, json=body, headers=headers)
-            except httpx2.TransportError as e:
+            except _RETRY_TRANSPORT as e:
                 if attempt >= self.max_retries:
                     raise
-                wait = _backoff_seconds(attempt, max_wait=30.0)
+                wait = _backoff_seconds(attempt, max_wait=_MAX_RETRY_WAIT_S)
                 logger.warning(f"{self.SERVICE_NAME} {type(e).__name__}; retry {attempt + 1}/"
                                f"{self.max_retries} in {wait:.1f}s")
                 time.sleep(wait)
@@ -292,8 +296,10 @@ class TypeSafeService(BaseLLMService):
             code = resp.status_code
             if 200 <= code < 300:
                 return resp.json()
-            if code in _RETRY_STATUSES and attempt < self.max_retries:
-                wait = _retry_after_s(resp) or _backoff_seconds(attempt, max_wait=30.0)
+            asked = _retry_after_s(resp)
+            if (code in _RETRY_STATUSES and attempt < self.max_retries
+                    and (asked is None or asked <= _MAX_RETRY_WAIT_S)):
+                wait = asked if asked is not None else _backoff_seconds(attempt, max_wait=_MAX_RETRY_WAIT_S)
                 logger.warning(f"{self.SERVICE_NAME} HTTP {code}; retry {attempt + 1}/"
                                f"{self.max_retries} in {wait:.1f}s")
                 time.sleep(wait)

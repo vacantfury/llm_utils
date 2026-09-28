@@ -142,6 +142,26 @@ class TestAdmission:
         with_sys = _admit_est(fake, "", n=10, system="s" * 4000)
         assert with_sys - base == pytest.approx(10 * 1000 * PAID.input_price / 1e6)
 
+    def test_threaded_realtime_path_draws_the_reservation_down(self, monkeypatch):
+        """Claude's realtime path records costs in pool threads; the copied
+        context carries the reservation there."""
+        from llm_utils.llm_services import ClaudeService
+        monkeypatch.setenv(spend.MAX_USD_ENV, "100")
+        model = next(m for m in LLMModel if m.provider.value == "anthropic")
+        svc = ClaudeService(model, api_key="k", use_batch_api=False)
+        seen = []
+
+        def one(self_, *a, **k):
+            self_._record_usage(10, 10, 0.25, False)
+            seen.append(spend_status())
+            return "ok"
+
+        monkeypatch.setattr(ClaudeService, "_realtime_one", one)
+        svc.batch_chat([("a", [("hi", None)])])
+        assert seen[0].spent == pytest.approx(0.25)
+        admitted = svc._spend_estimate("batch_chat", ([("a", [("hi", None)])],), {})
+        assert seen[0].reserved == pytest.approx(max(0.0, admitted - 0.25))
+
     def test_thinking_headroom_raises_the_ceiling(self):
         from llm_utils import ModelQuirk
         from llm_utils.llm_services import ClaudeService

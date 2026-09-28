@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, List, Optional, Tuple, TypeVar
 
 from ._logging import get_logger
 from . import spend as _spend
+from .llm_model import ModelQuirk
 
 logger = get_logger(__name__)
 
@@ -666,7 +667,9 @@ class BaseLLMService(ABC):
         """Whether this service's calls count against the run spend cap:
         paid API routes only, never self-served ones."""
         model = getattr(self, "model", None)
-        return model is not None and getattr(model, "jurisdiction", "us") != "self"
+        if model is None or not hasattr(model, "input_price"):
+            return False
+        return getattr(model, "jurisdiction", "us") != "self"
 
     def _output_hint(self, kwargs: dict) -> Optional[int]:
         """The per-call ``expected_output_tokens``, else the instance's."""
@@ -692,8 +695,13 @@ class BaseLLMService(ABC):
         budget = getattr(self, "_output_budget", None)
         ceiling = budget(max_tokens) if callable(budget) else max_tokens
         hint = self._output_hint(kwargs)
-        per_request = hint if hint is not None else min(
-            ceiling, config.get("spend_cap.assumed_output_tokens"))
+        if hint is not None:
+            per_request = hint
+        elif self.model.has_quirk(ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET):
+            # Thought tokens bill as output and routinely fill the headroom.
+            per_request = ceiling
+        else:
+            per_request = min(ceiling, config.get("spend_cap.assumed_output_tokens"))
         system_usd = (len(conversations) * (len(system or "") // _EST_CHARS_PER_TOKEN)
                       * self.model.input_price / 1_000_000)
         return self._estimate_cost_usd(conversations, ceiling, per_request) + system_usd

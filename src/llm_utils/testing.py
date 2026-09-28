@@ -61,6 +61,15 @@ class FakeCall:
         return self.messages[-1][0] if self.messages else ""
 
 
+def _is_script(responses: Any) -> bool:
+    """A sequence of answers: any iterable except a string, a mapping, or a
+    single object that happens to be iterable (a pydantic model)."""
+    from collections.abc import Iterable, Mapping
+    return (isinstance(responses, Iterable)
+            and not isinstance(responses, (str, bytes, Mapping))
+            and not hasattr(responses, "model_dump"))
+
+
 class FakeService(BaseLLMService):
     """Offline stand-in for any llm_utils service.
 
@@ -68,8 +77,8 @@ class FakeService(BaseLLMService):
 
     - a string (or any single object, e.g. a pydantic instance for
       ``chat_structured``): every request gets it;
-    - a list (or any iterable): answers in order, one per request; running out
-      raises ``AssertionError``;
+    - a list (or any other iterable): answers in order, one per request;
+      running out raises ``AssertionError``;
     - a dict: keyed by conversation id, else by the request's last message
       text; unmatched requests get ``default``;
     - a callable ``(text, conversation_id) -> answer``.
@@ -99,7 +108,7 @@ class FakeService(BaseLLMService):
         self.default = default
         self.calls: List[FakeCall] = []
         self._responses = responses
-        if isinstance(responses, (list, tuple, deque)) or hasattr(responses, "__next__"):
+        if _is_script(responses):
             self._responses = deque(responses)
 
     # -- answers -----------------------------------------------------------
@@ -117,7 +126,9 @@ class FakeService(BaseLLMService):
                 raise AssertionError(
                     f"FakeService: no scripted response left for request {cid!r} ({text[:60]!r})")
             return r.popleft()
-        if callable(r) and not isinstance(r, (str, BaseException)) and not isinstance(r, type):
+        if isinstance(r, type) and issubclass(r, BaseException):
+            return r("FakeService scripted failure")
+        if callable(r) and not isinstance(r, (str, BaseException, type)):
             return r(text, cid)
         return r                           # one constant answer (a string, an object, an exception)
 

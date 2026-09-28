@@ -46,6 +46,11 @@ class TestFakeService:
         obj = object()
         assert FakeService(responses=[obj]).chat_structured("p", dict) is obj
 
+    def test_any_iterable_is_a_script_and_an_exception_class_fails(self):
+        fake = FakeService(responses=(str(i) for i in range(2)))
+        assert [fake.chat("a"), fake.chat("b")] == ["0", "1"]
+        assert is_mechanism_error(FakeService(responses=TimeoutError).chat("x"))
+
     def test_a_single_object_is_a_constant_answer(self):
         from dataclasses import dataclass
 

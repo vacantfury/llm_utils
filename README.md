@@ -344,7 +344,8 @@ Or set `spend_cap: {max_usd_per_run: 40}` in the project's `llm_utils.yaml`.
 The admission estimate counts the messages and the system prompt as input
 and, per request, `expected_output_tokens` if the caller passes it (per call,
 or to the service constructor), else the smaller of the output budget and
-`spend_cap.assumed_output_tokens` (1024). The cap binds on recorded spend, so
+`spend_cap.assumed_output_tokens` (1024); thinking models count their full
+output budget. The cap binds on recorded spend, so
 a low estimate lets at most the call in hand overshoot. Native-batch
 auto-routing also reads `expected_output_tokens`, but without it keeps
 estimating with the full `max_tokens`, exactly as before; reasoning models,

@@ -151,6 +151,29 @@ class TestEvaluate:
         s.evaluate("x", QUESTIONS)
         assert len(s._client.requests) == 2
 
+    def test_a_long_retry_after_is_not_waited_out(self, svc):
+        s = svc((429, {}, {"retry-after": "3600"}))
+        with pytest.raises(ts.TypeSafeHTTPError, match="429"):
+            s.evaluate("x", QUESTIONS)
+        assert len(s._client.requests) == 1
+
+    def test_a_read_timeout_after_sending_is_not_resent(self, svc):
+        s = svc(httpx2.ReadTimeout("slow"), (200, OK_BODY))
+        with pytest.raises(httpx2.ReadTimeout):
+            s.evaluate("x", QUESTIONS)
+        assert len(s._client.requests) == 1
+
+    def test_usage_recorded_even_when_the_answer_is_unreadable(self, svc):
+        rows = []
+        bad = {**OK_BODY, "answers": {"billing": {"type": "mystery"}}}
+        BaseLLMService.set_usage_hook(lambda model, i, o, c, **kw: rows.append(c))
+        try:
+            with pytest.raises(ValueError, match="unknown type"):
+                svc((200, bad)).evaluate("x", QUESTIONS)
+        finally:
+            BaseLLMService.clear_usage_hook()
+        assert rows == [pytest.approx(0.042)]
+
     def test_gives_up_after_max_retries(self, svc):
         s = svc(*[(529, {})] * 4)
         with pytest.raises(ts.TypeSafeHTTPError, match="529"):
