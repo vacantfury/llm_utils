@@ -15,7 +15,7 @@ seams:
       - llm_utils.route_models
       - llm_utils.routes_for
       - llm_utils.route_status
-      - llm_utils.available_routes
+      - llm_utils.route_statuses
       - llm_utils.usable_routes
       - llm_utils.CLAUDE_API_ALLOW_ENV
       - llm_utils.ClaudeAPINotAllowed

@@ -47,7 +47,7 @@ from .routes import (
     route_models,
     routes_for,
     route_status,
-    available_routes,
+    route_statuses,
     usable_routes,
 )
 from .exceptions import (
@@ -93,7 +93,7 @@ __all__ = [
     'route_models',
     'routes_for',
     'route_status',
-    'available_routes',
+    'route_statuses',
     'usable_routes',
     # Models and enums
     'LLMModel',

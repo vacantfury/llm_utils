@@ -12,15 +12,21 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 - **Route availability** (`llm_utils.routes`, exported from the seam):
   `routes_for(logical)` returns the route names (provider values) registered
   for a logical model; `route_models`, `logical_models`, `route_status`,
-  `available_routes`, `usable_routes` and `RegistryRouteResolver` answer which
+  `route_statuses`, `usable_routes` and `RegistryRouteResolver` answer which
   routes this process can use. The default check reads configuration only
   (key variable, Claude API opt-in, broker mode, installed extras, a registered
   SLURM endpoint manager); `probe=True` sends one unbilled request per API
-  route. An unknown logical model raises `ValueError`, never an empty set.
+  route (a model listing; OpenRouter's per-key endpoint; an AWS identity call
+  for Bedrock). HTTP 401/403 (400 on Google), 402 and a quota 429 read as
+  unusable. The Bedrock configuration check never resolves the credential
+  chain (no instance-metadata call, no credential_process). An unknown
+  logical model raises `ValueError`, never an empty set; `route_status` given
+  a logical name that covers several routes raises `ValueError` too.
 - `LLMModel.logical_name`: `weights` when set, else `model_id`.
 - `llm_utils.config`: packaged `defaults.yaml` plus a per-project override
   (`LLM_UTILS_CONFIG` or an upward-found `llm_utils.yaml`) and
-  `configure(...)`; unknown keys raise. First knob: `routes.probe_timeout_s`.
+  `configure(...)`; unknown keys and wrong value types raise. First knob:
+  `routes.probe_timeout_s`.
   New core dependency: `pyyaml`.
 
 **Changed:**

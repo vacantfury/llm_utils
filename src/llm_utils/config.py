@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import os
+import stat
 import threading
 from importlib.resources import files
 from typing import Any, Optional
@@ -24,6 +25,10 @@ import yaml
 
 CONFIG_ENV = "LLM_UTILS_CONFIG"
 PROJECT_FILE = "llm_utils.yaml"
+
+# Keys whose value may be null (off). Every other override must keep the
+# packaged default's type: a number for a number, a string for a string.
+NULLABLE: frozenset = frozenset()
 
 _lock = threading.Lock()
 _cache: Optional[dict] = None
@@ -34,16 +39,26 @@ def _packaged_defaults() -> dict:
     return yaml.safe_load(files("llm_utils").joinpath("defaults.yaml").read_text()) or {}
 
 
+def _readable(path: str) -> bool:
+    # A FIFO counts: some secret/environment managers serve files that way
+    # (the same rule as the .env lookup in constants.py).
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return False
+    return stat.S_ISREG(mode) or stat.S_ISFIFO(mode)
+
+
 def _find_project_file() -> Optional[str]:
     explicit = os.getenv(CONFIG_ENV)
     if explicit:
-        if not os.path.isfile(explicit):
-            raise ValueError(f"{CONFIG_ENV}={explicit!r} is not a file")
+        if not _readable(explicit):
+            raise ValueError(f"{CONFIG_ENV}={explicit!r} is not a readable file")
         return explicit
     d = os.getcwd()
     while True:
         p = os.path.join(d, PROJECT_FILE)
-        if os.path.isfile(p):
+        if _readable(p):
             return p
         parent = os.path.dirname(d)
         if parent == d:
@@ -62,8 +77,25 @@ def _merge(base: dict, override: dict, where: str, path: str = "") -> dict:
                 raise ValueError(f"{where}: {dotted!r} must be a mapping")
             out[key] = _merge(base[key], value, where, dotted + ".")
         else:
+            _check_type(base[key], value, where, dotted)
             out[key] = value
     return out
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_type(default: Any, value: Any, where: str, dotted: str) -> None:
+    if value is None:
+        if dotted in NULLABLE or default is None:
+            return
+        raise ValueError(f"{where}: {dotted!r} may not be null")
+    if default is None or (_is_number(default) and _is_number(value)):
+        return
+    if type(value) is not type(default):
+        raise ValueError(f"{where}: {dotted!r} must be a {type(default).__name__}, "
+                         f"got {value!r}")
 
 
 def _load() -> dict:
