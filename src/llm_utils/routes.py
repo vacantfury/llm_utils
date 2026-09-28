@@ -37,7 +37,7 @@ import httpx2
 
 from . import config
 from .claude_api_policy import ALLOW_ENV as CLAUDE_API_ALLOW_ENV, claude_api_allowed
-from .constants import OPENAI_API_URL, OPENROUTER_API_URL
+from .constants import OPENAI_API_URL, OPENROUTER_API_URL, TYPESAFE_API_URL
 from .llm_model import LLMModel, Provider
 
 BROKER_URL_ENV = "LLM_UTILS_BROKER_URL"   # same switch as llm_utils.broker
@@ -45,7 +45,8 @@ ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
 GOOGLE_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 # Probe URLs where the model listing would not test the key: OpenRouter's
 # listing is public, its per-key endpoint needs the key.
-_PROBE_URLS = {Provider.OPENROUTER: f"{OPENROUTER_API_URL}/key"}
+_PROBE_URLS = {Provider.OPENROUTER: f"{OPENROUTER_API_URL}/key",
+               Provider.TYPESAFE: f"{TYPESAFE_API_URL}/v1/models"}
 # Status codes meaning "this credential will not work", per provider, beyond
 # 401/403/402. Google answers an invalid key with 400 API_KEY_INVALID.
 _REJECT_CODES = {Provider.GOOGLE: (400,)}
@@ -180,6 +181,8 @@ def _config_status(model: LLMModel) -> Tuple[bool, str]:
         return False, f"Anthropic API calls are off in this process ({CLAUDE_API_ALLOW_ENV} is not 1)"
     if p in _BROKERED and _broker_mode():
         return _broker_status()
+    if _broker_mode() and _key_env(p) is not None:
+        return False, "broker mode, and this provider is not a broker route"
     if p is Provider.BEDROCK:
         return _bedrock_credentials()
     if p is Provider.LOCAL:

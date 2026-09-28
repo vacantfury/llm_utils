@@ -60,6 +60,7 @@ from .exceptions import (
     BrokerError,
     BrokerModeUnsupportedError,
     SpendCapExceededError,
+    RetentionPolicyError,
 )
 
 # Concrete service implementations — ALL serving routes are part of the
@@ -77,6 +78,12 @@ from .llm_services import (
     LocalLMService,
     SlurmClusterService,
     BedrockService,
+    TypeSafeService,
+)
+# Typed evaluation (TypeSafe Jev): question builders and answer types
+from .llm_services.typesafe_service import (
+    Evaluation, NoulAnswer, ChoiceAnswer, ScoreAnswer,
+    noul_question, choice_question, score_question,
 )
 
 # Define what's exported
@@ -144,6 +151,17 @@ __all__ = [
     'LocalLMService',
     'SlurmClusterService',
     'BedrockService',
+    'TypeSafeService',
+
+    # Typed evaluation (TypeSafe Jev)
+    'Evaluation',
+    'NoulAnswer',
+    'ChoiceAnswer',
+    'ScoreAnswer',
+    'noul_question',
+    'choice_question',
+    'score_question',
+    'RetentionPolicyError',
 
     # Version
     '__version__'

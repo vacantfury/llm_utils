@@ -37,6 +37,16 @@ var to `none`.
   `check_exception_contract()` and `EXCEPTION_CONTRACT`.
 - `[tool.pytest.ini_options]`: `testpaths`, markers `live`/`slow`/`eval`/
   `quarantine`, excluded by default.
+- **TypeSafe Jev typed evaluation:** `Provider.TYPESAFE` (jurisdiction `us`),
+  `LLMModel.JEV_1_13_0` ($0.042 per 1M input tokens, output free),
+  `TypeSafeService.evaluate(state, questions, *, personal_data=False)` /
+  `aevaluate`, question builders `noul_question` / `choice_question` /
+  `score_question`, answer types `Evaluation` / `NoulAnswer` /
+  `ChoiceAnswer` / `ScoreAnswer`, and `RetentionPolicyError` (personal data
+  refused unless the service was built with `zero_retention=True`). Raw
+  HTTP, no SDK dependency; env `TYPESAFE_API_KEY`; usage and cost recorded
+  like every other service; the spend cap applies. `route_status` probes it
+  at `GET /v1/models`, and reports broker mode as unusable for it.
 
 ## v8.3.0 — 2026-09-27 (MINOR: new capability, additive)
 

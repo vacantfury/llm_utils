@@ -17,7 +17,7 @@ from .claude_api_policy import require_claude_api_allowed
 from .llm_services import (
     OpenAIService, DeepSeekService, ZAIService, XAIService, MoonshotService,
     OpenRouterService, ClaudeService, GoogleService, LocalLMService,
-    SlurmClusterService, BedrockService,
+    SlurmClusterService, BedrockService, TypeSafeService,
 )
 
 
@@ -43,6 +43,7 @@ class LLMServiceFactory:
         Provider.GOOGLE: GoogleService,
         Provider.LOCAL: LocalLMService,
         Provider.SLURM_CLUSTER: SlurmClusterService,
+        Provider.TYPESAFE: TypeSafeService,
     }
     
     # Cluster server manager (set by the consumer's orchestrator before

@@ -65,6 +65,7 @@ ZAI_API_URL: Final[str] = "https://api.z.ai/api/paas/v4"           # direct main
 OPENROUTER_API_URL: Final[str] = "https://openrouter.ai/api/v1"    # US aggregator
 XAI_API_URL: Final[str] = "https://api.x.ai/v1"                    # US jurisdiction
 MOONSHOT_API_URL: Final[str] = "https://api.moonshot.ai/v1"        # direct mainland (.ai = international)
+TYPESAFE_API_URL: Final[str] = "https://api.typesafe.ai"            # US; typed evaluation (Jev)
 DEFAULT_SYSTEM_MESSAGE: Final[str] = "You are a helpful assistant."
 
 

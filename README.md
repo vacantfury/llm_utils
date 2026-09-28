@@ -155,6 +155,34 @@ config value. `RegistryRouteResolver` is the same lookup as an injectable
 object (`routes_for(logical) -> frozenset[str]`). Which machine holds which
 credentials is the device layer's record, built from these answers.
 
+### Typed evaluation (TypeSafe Jev)
+
+`TypeSafeService` is not a chat model: one request sends a `state` (text, a
+JSON object, or messages) and named typed questions, and gets typed answers
+with probabilities. Billed per input token; output is free.
+
+```python
+from llm_utils import LLMModel, LLMServiceFactory, noul_question, choice_question, score_question
+
+jev = LLMServiceFactory.create(LLMModel.JEV_1_13_0)      # TYPESAFE_API_KEY
+ev = jev.evaluate({"ticket": "I was charged twice"}, {
+    "billing": noul_question("Is this about billing?"),
+    "topic": choice_question(["billing", "technical", "other"]),
+    "urgency": score_question(["can wait", "this week", "today"]),
+})
+ev.answers["billing"].noul                  # probability of yes
+ev.answers["topic"].probabilities           # per option; .choice, .confidence
+ev.answers["urgency"].score                 # probability-weighted level
+```
+
+Choice questions take 2 to 255 options, score questions 2 to 10 levels. Pin
+the version row (not the `jev-latest` alias). Retries 408/429/5xx (529 =
+overloaded) and dropped connections. The direct API has no per-request
+zero-retention switch: `evaluate(..., personal_data=True)` raises
+`RetentionPolicyError` unless the service was built with
+`zero_retention=True` under a written zero-retention agreement. Not available
+through the credential broker.
+
 ### Local HuggingFace models
 
 Install the optional `local` dependencies to load models in the caller's process

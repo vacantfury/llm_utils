@@ -36,7 +36,7 @@ from .base_llm_service import BaseLLMService, make_mechanism_error
 from .claude_api_policy import ClaudeAPINotAllowed
 from .exceptions import (
     AccountFatalError, BrokerError, BrokerModeUnsupportedError, CreditsExhaustedError,
-    FatalModelError, InvalidCredentialError, SpendCapExceededError,
+    FatalModelError, InvalidCredentialError, RetentionPolicyError, SpendCapExceededError,
 )
 from .llm_model import LLMModel
 
@@ -230,6 +230,7 @@ EXCEPTION_CONTRACT: Dict[type, type] = {
     BrokerError: RuntimeError,
     BrokerModeUnsupportedError: BrokerError,
     ClaudeAPINotAllowed: PermissionError,
+    RetentionPolicyError: PermissionError,
 }
 
 # Pairs that must stay unrelated: catching one must never catch the other.

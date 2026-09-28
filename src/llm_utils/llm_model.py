@@ -56,6 +56,10 @@ class Provider(str, Enum):
     # OpenAI-wire-compatible → its own BedrockService (converse), not an
     # OpenAIService subclass.
     BEDROCK = "bedrock"
+    # TypeSafe AI "System One" typed evaluation (Jev): US-hosted; not a chat
+    # model (TypeSafeService.evaluate). No per-request zero-retention switch
+    # on the direct API.
+    TYPESAFE = "typesafe"
     LOCAL = "local"
     SLURM_CLUSTER = "slurm_cluster"
 
@@ -83,6 +87,7 @@ _PROVIDER_JURISDICTION = {
     Provider.XAI: "us",
     Provider.OPENROUTER: "us",
     Provider.BEDROCK: "us",
+    Provider.TYPESAFE: "us",
     Provider.DEEPSEEK: "prc",
     Provider.ZAI: "prc",
     Provider.MOONSHOT: "prc",
@@ -571,6 +576,13 @@ class LLMModel(Enum):
         "google/gemma-3-12b-it", Provider.SLURM_CLUSTER,
         max_context_len=128_000, family="gemma", alignment_tier="mid",
         weights="gemma-3-12b-it")
+
+    # ──────── TypeSafe AI typed evaluation (Jev) ────────
+    # Not a chat model: TypeSafeService.evaluate(state, typed questions) ->
+    # typed answers with probabilities. $0.042 per 1M input tokens, output
+    # free (verified 2026-09-21). Pin the version id; `jev-latest` is an alias
+    # that moves.
+    JEV_1_13_0 = ModelSpec("jev-1.13.0", Provider.TYPESAFE, 0.042, 0.0, family="jev")
 
     # ──────── Guard model baselines (safety classifiers — inspect/judge, not
     # attack targets). `alignment_tier` deliberately left None

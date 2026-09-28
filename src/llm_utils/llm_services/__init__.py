@@ -11,6 +11,7 @@ from .google_service import GoogleService
 from .local_lm_service import LocalLMService
 from .slurm_cluster_service import SlurmClusterService
 from .bedrock_service import BedrockService
+from .typesafe_service import TypeSafeService
 
 __all__ = [
     'OpenAIService',
@@ -24,4 +25,5 @@ __all__ = [
     'LocalLMService',
     'SlurmClusterService',
     'BedrockService',
+    'TypeSafeService',
 ]
