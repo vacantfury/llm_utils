@@ -7,3 +7,4 @@ secrets/
 *.pem
 *credentials*
 *.secret
+ai_agent_proof/
