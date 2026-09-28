@@ -80,6 +80,7 @@ class GoogleService(BaseLLMService):
             )
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
+        self.expected_output_tokens = kwargs.get("expected_output_tokens")
         self.top_p = kwargs.get("top_p", 1.0)
 
         if self._broker_route is not None:
@@ -399,7 +400,8 @@ class GoogleService(BaseLLMService):
                 format_failed[cid] = make_mechanism_error(
                     f"message formatting failed: {e}")
 
-        if prepared and self._route_to_native_batch(conversations, max_tokens):
+        if prepared and self._route_to_native_batch(
+                conversations, max_tokens, self._output_hint(kwargs)):
             inline_reqs = self._build_inline_requests(
                 prepared, temperature, max_tokens, system_message
             )

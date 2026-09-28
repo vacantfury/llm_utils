@@ -13,3 +13,16 @@ routes:
   # endpoints that serve real calls fine report `unreachable` (the probe's
   # reason string names the timeout).
   probe_timeout_s: 10.0
+
+spend_cap:
+  # US dollars of paid API spend one process may make (the "run"); null = no
+  # cap. Checked before every paid call against recorded spend plus estimates
+  # in flight (llm_utils.spend). A launcher running an approved larger job
+  # sets LLM_UTILS_MAX_USD_PER_RUN, or the project sets this key in its
+  # llm_utils.yaml. Basis for 5.0: above a routine single process (one
+  # council sitting cost $0.79; a reasoning-model judge job about $0.08 of
+  # real spend) and below an unapproved bulk sweep, the incident this control
+  # exists for. Tuning path: per-process spend from the call ledger (rows
+  # grouped by launch point and process); keep the cap above routine
+  # processes' spend and below the smallest sweep that needed approval.
+  max_usd_per_run: 5.0

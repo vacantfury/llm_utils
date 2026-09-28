@@ -49,6 +49,22 @@ class CreditsExhaustedError(AccountFatalError):
     pass
 
 
+class SpendCapExceededError(AccountFatalError):
+    """A paid call was refused BEFORE sending because it would take the
+    process past its spend cap (``spend_cap.max_usd_per_run``; see
+    ``llm_utils.spend``). Run-global like the other account-fatal errors:
+    every later paid call in this process meets the same cap, so runners abort
+    the run instead of retrying. Raise the cap in the launcher of an approved
+    run (``LLM_UTILS_MAX_USD_PER_RUN``) and rerun."""
+
+    def __init__(self, message: str, *, estimate: float = 0.0, spent: float = 0.0,
+                 cap: float = 0.0):
+        super().__init__(message)
+        self.estimate = estimate
+        self.spent = spent
+        self.cap = cap
+
+
 class BrokerError(RuntimeError):
     """Broker configuration, grant, or transport failed; never fall back to a key."""
 

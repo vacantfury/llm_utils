@@ -9,6 +9,7 @@ trio (``submit_batch_chat`` / ``batch_chat_status`` / ``harvest_batch_chat``)
 """
 
 import asyncio
+import functools
 import inspect
 import random
 import time
@@ -17,6 +18,7 @@ from dataclasses import dataclass, asdict
 from typing import Any, Awaitable, Callable, List, Optional, Tuple, TypeVar
 
 from ._logging import get_logger
+from . import spend as _spend
 
 logger = get_logger(__name__)
 
@@ -202,6 +204,41 @@ _EST_CHARS_PER_TOKEN = 4             # rough text-token estimate
 _EST_IMAGE_TOKENS = 1000             # flat per-image token estimate
 
 
+def _spend_guard(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap one paid entry point with the run spend cap (``llm_utils.spend``).
+
+    Admission happens before the wrapped method runs, so a refused call sends
+    nothing. Nested guarded calls on the same thread (``chat`` ->
+    ``batch_chat``, an override calling ``super()``) are admitted once.
+    """
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        if _spend.in_guard() or not self._spend_capped():
+            return fn(self, *args, **kwargs)
+        if name == "harvest_batch_chat":
+            with _spend.guarded():
+                out = fn(self, *args, **kwargs)
+            if out is not None:
+                _spend.settle_batch(args[0] if args else kwargs.get("batch_id"))
+            return out
+        estimate = self._spend_estimate(name, args, kwargs)
+        if name == "submit_batch_chat":
+            estimate *= self.BATCH_COST_DISCOUNT
+        what = f"{type(self).__name__}.{name} ({getattr(getattr(self, 'model', None), 'model_id', '?')})"
+        held = _spend.admit(estimate, what)
+        try:
+            with _spend.guarded():
+                out = fn(self, *args, **kwargs)
+            if name == "submit_batch_chat":
+                _spend.commit_batch(out, held)
+        finally:
+            _spend.release(held)
+        return out
+
+    wrapper._spend_guarded = True
+    return wrapper
+
+
 @dataclass
 class UsageStats:
     """Tracks inference count, token usage, and cost."""
@@ -249,12 +286,36 @@ class BaseLLMService(ABC):
     # Default when NO hook is installed: if the optional `agent_manager`
     # package is importable, each call lands one row in its call ledger
     # (llm_utils.call_ledger.record_call; a hook can chain to it).
+    # Paid entry points admitted against the run spend cap (llm_utils.spend)
+    # before they send anything. Every subclass that defines one of these
+    # methods gets it wrapped at class creation (``__init_subclass__``); a
+    # service with another paid entry point extends the tuple and overrides
+    # ``_spend_estimate`` for it.
+    _SPEND_GUARDED: Tuple[str, ...] = (
+        "batch_chat", "batch_chat_with_logprobs", "chat_structured",
+        "submit_batch_chat", "harvest_batch_chat",
+    )
+
+    # Expected output tokens per request, for cost ESTIMATES only (batch
+    # auto-routing and the spend cap), never sent to the provider. None =
+    # assume the full ``max_tokens``. Reasoning models, whose ``max_tokens``
+    # must hold hidden reasoning, pass a realistic figure; also accepted per
+    # call as ``expected_output_tokens=``.
+    expected_output_tokens: Optional[int] = None
+
     _usage_hook: Optional[Callable[..., None]] = None
     _usage_hook_warned: bool = False
     _failure_hook_warned: bool = False
     # (hook, takes-failure-keywords) for the hook last inspected: the
     # signature is read once per registered hook, not once per failure.
     _failure_hook_shape: Optional[Tuple[Callable[..., None], bool]] = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for name in cls._SPEND_GUARDED:
+            fn = cls.__dict__.get(name)
+            if fn is not None and not getattr(fn, "_spend_guarded", False):
+                setattr(cls, name, _spend_guard(name, fn))
 
     @classmethod
     def set_usage_hook(cls, hook: Callable[..., None]) -> None:
@@ -305,6 +366,8 @@ class BaseLLMService(ABC):
         self, input_tokens: int, output_tokens: int, cost: float, is_test: bool,
     ) -> None:
         self.total_usage.record(input_tokens, output_tokens, cost)
+        if self._spend_capped():
+            _spend.record(cost)
         if not is_test:
             self.algorithm_usage.record(input_tokens, output_tokens, cost)
         if BaseLLMService._usage_hook is not None:
@@ -589,6 +652,29 @@ class BaseLLMService(ABC):
     # Native-batch auto-routing (shared by OpenAI / Anthropic / Google).
     # ------------------------------------------------------------------
 
+    def _spend_capped(self) -> bool:
+        """Whether this service's calls count against the run spend cap:
+        paid API routes only, never self-served ones."""
+        model = getattr(self, "model", None)
+        return model is not None and getattr(model, "jurisdiction", "self") != "self"
+
+    def _output_hint(self, kwargs: dict) -> Optional[int]:
+        """The per-call ``expected_output_tokens``, else the instance's."""
+        hint = kwargs.get("expected_output_tokens", self.expected_output_tokens)
+        if hint is not None and (isinstance(hint, bool) or not isinstance(hint, int) or hint < 0):
+            raise ValueError(f"expected_output_tokens must be an int >= 0, got {hint!r}")
+        return hint
+
+    def _spend_estimate(self, name: str, args: tuple, kwargs: dict) -> float:
+        """Estimated cost of one guarded call, from its arguments."""
+        if name == "chat_structured":
+            prompt = args[0] if args else kwargs.get("prompt", "")
+            conversations = [("_one", [(prompt, None)])]
+        else:
+            conversations = args[0] if args else kwargs.get("conversations", [])
+        max_tokens = kwargs.get("max_tokens", getattr(self, "max_tokens", 0))
+        return self._estimate_cost_usd(conversations, max_tokens, self._output_hint(kwargs))
+
     def _supports_native_batch(self) -> bool:
         """Whether this service can reach a native batch API. Overridden by
         the services that have one; the default keeps every other route on
@@ -599,10 +685,12 @@ class BaseLLMService(ABC):
         self,
         conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
         max_tokens: int,
+        expected_output_tokens: Optional[int] = None,
     ) -> float:
-        """Crude worst-case job cost over seam-format conversations: chars/4
-        (+ flat per image) input tokens, full ``max_tokens`` output per
-        request. Only needs to be right within ~2-3x to route correctly."""
+        """Crude job cost over seam-format conversations: chars/4 (+ flat per
+        image) input tokens, and per request ``expected_output_tokens`` output
+        tokens when given, else the full ``max_tokens`` (worst case). Only
+        needs to be right within ~2-3x to route correctly."""
         in_tokens = 0
         for _cid, messages in conversations:
             for text, image in messages:
@@ -611,7 +699,8 @@ class BaseLLMService(ABC):
                     images = image if isinstance(image, list) else [image]
                     in_tokens += _EST_IMAGE_TOKENS * sum(
                         1 for img in images if img is not None)
-        out_tokens = len(conversations) * max_tokens
+        per_request = max_tokens if expected_output_tokens is None else expected_output_tokens
+        out_tokens = len(conversations) * per_request
         return (
             in_tokens * self.model.input_price
             + out_tokens * self.model.output_price
@@ -621,13 +710,14 @@ class BaseLLMService(ABC):
         self,
         conversations: List[Tuple[str, List[Tuple[str, Optional[Any]]]]],
         max_tokens: int,
+        expected_output_tokens: Optional[int] = None,
     ) -> bool:
         """Decide realtime vs native batch for this job (see ``use_batch_api``)."""
         if not self._supports_native_batch():
             return False
         if self.use_batch_api is not None:
             return self.use_batch_api
-        est = self._estimate_cost_usd(conversations, max_tokens)
+        est = self._estimate_cost_usd(conversations, max_tokens, expected_output_tokens)
         to_batch = est >= self.batch_threshold_usd
         logger.info(
             f"auto-route: est. job cost ${est:.2f} "

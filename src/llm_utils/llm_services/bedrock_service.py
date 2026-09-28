@@ -89,6 +89,7 @@ class BedrockService(BaseLLMService):
         self.model = model
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
+        self.expected_output_tokens = kwargs.get("expected_output_tokens")
         from ..broker import consumer_route
         self._broker_route = consumer_route("bedrock", "converse")
         if self._broker_route is not None:

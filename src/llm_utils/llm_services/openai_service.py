@@ -92,6 +92,7 @@ class OpenAIService(BaseLLMService):
             )
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
+        self.expected_output_tokens = kwargs.get("expected_output_tokens")
         # Extra request params passed verbatim to every API call (e.g.
         # response_format, seed, top_p). Per-call kwargs["api_params"] merges
         # on top of these.
@@ -456,7 +457,8 @@ class OpenAIService(BaseLLMService):
             for cid, msgs in conversations
         ]
 
-        if self._route_to_native_batch(conversations, max_tokens):
+        if self._route_to_native_batch(
+                conversations, max_tokens, self._output_hint(kwargs)):
             batch = self._submit_batch(prepared, temperature, max_tokens, extra)
             batch = self._poll_until_done(batch)
             results_map = self._collect_results(batch, is_test)
