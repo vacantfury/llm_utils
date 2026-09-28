@@ -131,6 +131,30 @@ Prices differ per route (OpenRouter's aggregated hosts are often cheaper than
 the vendor's own API; self-served rows are $0), so `get_usage()` costs stay
 correct whichever route you pick.
 
+### Which routes can this machine use?
+
+`llm_utils.routes` answers two questions about a *logical* model (the model
+itself, whoever serves it: the registry's `weights` label, else its
+`model_id`). Route names are provider values (`"zai"`, `"openrouter"`,
+`"bedrock"`, `"slurm_cluster"`, ...).
+
+```python
+from llm_utils import routes_for, route_status, usable_routes
+
+routes_for("glm-5")                  # frozenset({"zai", "openrouter", "bedrock"})
+usable_routes("glm-5")               # rows whose credentials/extras exist here
+route_status(LLMModel.BEDROCK_GLM_5, probe=True)
+# RouteStatus(usable=False, reason="no AWS credentials in the default chain ...")
+```
+
+The default check reads configuration only: the key variable, the Claude API
+opt-in, broker mode, installed extras, a registered SLURM endpoint manager.
+`probe=True` adds one unbilled request per API route (a model listing, or an
+AWS identity call for Bedrock); the timeout is the `routes.probe_timeout_s`
+config value. `RegistryRouteResolver` is the same lookup as an injectable
+object (`routes_for(logical) -> frozenset[str]`). Which machine holds which
+credentials is the device layer's record, built from these answers.
+
 ### Local HuggingFace models
 
 Install the optional `local` dependencies to load models in the caller's process
@@ -263,6 +287,14 @@ service = LLMServiceFactory.create(
     api_params={"response_format": {"type": "json_object"}},
 )
 ```
+
+## Configuration
+
+Tunable knobs live in the packaged `defaults.yaml`. Override them per project
+with a YAML file of the same shape holding only the keys you change: point
+`LLM_UTILS_CONFIG` at it, or put `llm_utils.yaml` in the project tree (found
+by an upward search from the working directory). A process can also call
+`llm_utils.config.configure(section={...})`. Unknown keys raise at load.
 
 ## Credentials
 

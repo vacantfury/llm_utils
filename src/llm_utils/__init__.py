@@ -37,6 +37,19 @@ from .claude_api_policy import (
 )
 # Default durable usage record (optional agent_manager call ledger)
 from . import call_ledger
+# Package configuration (packaged YAML defaults + per-project override)
+from . import config
+# Route availability: logical model -> serving routes, usable here or not
+from .routes import (
+    RouteStatus,
+    RegistryRouteResolver,
+    logical_models,
+    route_models,
+    routes_for,
+    route_status,
+    available_routes,
+    usable_routes,
+)
 from .exceptions import (
     FatalModelError,
     AccountFatalError,
@@ -71,6 +84,17 @@ __all__ = [
     "is_claude_model",
     # Default usage record (call ledger, optional)
     'call_ledger',
+    # Configuration (YAML defaults + per-project override)
+    'config',
+    # Route availability
+    'RouteStatus',
+    'RegistryRouteResolver',
+    'logical_models',
+    'route_models',
+    'routes_for',
+    'route_status',
+    'available_routes',
+    'usable_routes',
     # Models and enums
     'LLMModel',
     'Provider',

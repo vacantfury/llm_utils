@@ -488,7 +488,8 @@ class LLMModel(Enum):
     # ──────── Local (HF transformers in-process) ────────
     LLAMA3       = ModelSpec("llama3",                                   Provider.LOCAL)
     LLAMA3_1     = ModelSpec("llama3.1",                                 Provider.LOCAL)
-    LLAMA3_8B    = ModelSpec("meta-llama/Meta-Llama-3-8B-Instruct",      Provider.LOCAL)
+    LLAMA3_8B    = ModelSpec("meta-llama/Meta-Llama-3-8B-Instruct",      Provider.LOCAL,
+                             weights="meta-llama-3-8b-instruct")
     LLAMA3_2_1B  = ModelSpec("meta-llama/Llama-3.2-1B-Instruct",         Provider.LOCAL)
     LLAMA3_2_3B  = ModelSpec("meta-llama/Llama-3.2-3B-Instruct",         Provider.LOCAL)
     MISTRAL_7B   = ModelSpec("mistralai/Mistral-7B-Instruct-v0.2",       Provider.LOCAL)
@@ -505,7 +506,8 @@ class LLMModel(Enum):
         max_context_len=131_072)               # Llama-3.1 long-context
     LLAMA3_8B_CLUSTER = ModelSpec(
         "meta-llama/Meta-Llama-3-8B-Instruct", Provider.SLURM_CLUSTER,
-        max_context_len=8_192)                 # Llama-3 (8K)
+        max_context_len=8_192,                 # Llama-3 (8K)
+        weights="meta-llama-3-8b-instruct")
     VICUNA_13B_CLUSTER = ModelSpec(
         "lmsys/vicuna-13b-v1.5", Provider.SLURM_CLUSTER,
         max_context_len=4_096)                 # Vicuna v1.5 (4K)
@@ -761,6 +763,13 @@ class LLMModel(Enum):
         """Identity of the underlying weights when this model is reachable on
         more than one serving route; None for single-route (closed) models."""
         return self.value.weights
+
+    @property
+    def logical_name(self) -> str:
+        """The model independent of its serving route: ``weights`` when set,
+        else ``model_id``. Rows sharing it are routes to one logical model
+        (see ``llm_utils.routes``)."""
+        return self.weights or self.model_id
 
     @property
     def jurisdiction(self) -> str:

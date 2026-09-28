@@ -760,6 +760,7 @@ dependencies = [
     { name = "openai" },
     { name = "pillow" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -787,6 +788,7 @@ requires-dist = [
     { name = "openai", specifier = ">=2.47" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "torch", marker = "extra == 'local'", specifier = ">=2.2" },
     { name = "transformers", marker = "extra == 'local'", specifier = ">=4.51" },
 ]

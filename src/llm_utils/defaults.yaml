@@ -1,0 +1,15 @@
+# llm_utils packaged defaults: the tunable knobs of the transport layer.
+#
+# Override per project with a YAML file of the same shape (only the keys you
+# change): point LLM_UTILS_CONFIG at it, or put `llm_utils.yaml` in the
+# project tree (found by an upward search from the working directory, like
+# `.env`). Unknown keys are an error, so a typo never silently falls back to
+# the default. Read through `llm_utils.config.get_config()`.
+
+routes:
+  # Seconds allowed for one reachability probe (`route_status(..., probe=True)`).
+  # A probe is one unbilled GET (a model listing or an identity call); a slow
+  # endpoint reads as unreachable. Tuning path: raise it if probes against
+  # endpoints that serve real calls fine report `unreachable` (the probe's
+  # reason string names the timeout).
+  probe_timeout_s: 10.0

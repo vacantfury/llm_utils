@@ -3,6 +3,30 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+### Added
+
+- **Route availability** (`llm_utils.routes`, exported from the seam):
+  `routes_for(logical)` returns the route names (provider values) registered
+  for a logical model; `route_models`, `logical_models`, `route_status`,
+  `available_routes`, `usable_routes` and `RegistryRouteResolver` answer which
+  routes this process can use. The default check reads configuration only
+  (key variable, Claude API opt-in, broker mode, installed extras, a registered
+  SLURM endpoint manager); `probe=True` sends one unbilled request per API
+  route. An unknown logical model raises `ValueError`, never an empty set.
+- `LLMModel.logical_name`: `weights` when set, else `model_id`.
+- `llm_utils.config`: packaged `defaults.yaml` plus a per-project override
+  (`LLM_UTILS_CONFIG` or an upward-found `llm_utils.yaml`) and
+  `configure(...)`; unknown keys raise. First knob: `routes.probe_timeout_s`.
+  New core dependency: `pyyaml`.
+
+### Changed
+
+- `LLAMA3_8B` (local) and `LLAMA3_8B_CLUSTER` now share
+  `weights="meta-llama-3-8b-instruct"`, so each lists the other in
+  `route_twins()`.
+
 ## v8.2.0 — 2026-09-25 (MINOR: new capability, backward compatible)
 
 **Added:** an optional loopback credential-broker mode (`llm_utils.broker`, no extra dependency). When `LLM_UTILS_BROKER_URL` is set to `http://127.0.0.1:<port>`, every provider (OpenAI and the OpenAI-compatible providers, Anthropic, Google, Bedrock through a narrow Converse facade) obtains a short-lived surrogate and a fixed route base URL from the broker and never reads a provider key; SDK retries, environment proxies and redirects are off; batch/file APIs and account-status or management-key lookups raise `BrokerModeUnsupportedError`. Unset: behavior is unchanged. The Claude API opt-in (`LLM_UTILS_ALLOW_CLAUDE_API`) applies in both modes.
