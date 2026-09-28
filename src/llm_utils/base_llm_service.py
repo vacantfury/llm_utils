@@ -204,6 +204,10 @@ _EST_CHARS_PER_TOKEN = 4             # rough text-token estimate
 _EST_IMAGE_TOKENS = 1000             # flat per-image token estimate
 
 
+_CONVERSATION_ENTRY_POINTS = frozenset({
+    "batch_chat", "batch_chat_with_logprobs", "submit_batch_chat"})
+
+
 def _spend_guard(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap one paid entry point with the run spend cap (``llm_utils.spend``).
 
@@ -215,6 +219,12 @@ def _spend_guard(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
     def wrapper(self, *args, **kwargs):
         if _spend.in_guard() or not self._spend_capped():
             return fn(self, *args, **kwargs)
+        if name in _CONVERSATION_ENTRY_POINTS:
+            # A generator would be consumed by the estimate before the call.
+            if args and not isinstance(args[0], (list, tuple)):
+                args = (list(args[0]),) + args[1:]
+            elif "conversations" in kwargs and not isinstance(kwargs["conversations"], (list, tuple)):
+                kwargs["conversations"] = list(kwargs["conversations"])
         if name == "harvest_batch_chat":
             with _spend.guarded():
                 out = fn(self, *args, **kwargs)
@@ -225,14 +235,14 @@ def _spend_guard(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
         if name == "submit_batch_chat":
             estimate *= self.BATCH_COST_DISCOUNT
         what = f"{type(self).__name__}.{name} ({getattr(getattr(self, 'model', None), 'model_id', '?')})"
-        held = _spend.admit(estimate, what)
+        hold = _spend.admit(estimate, what)
         try:
-            with _spend.guarded():
+            with _spend.guarded(hold):
                 out = fn(self, *args, **kwargs)
             if name == "submit_batch_chat":
-                _spend.commit_batch(out, held)
+                _spend.commit_batch(out, hold.estimate)
         finally:
-            _spend.release(held)
+            _spend.release(hold)
         return out
 
     wrapper._spend_guarded = True
@@ -656,7 +666,7 @@ class BaseLLMService(ABC):
         """Whether this service's calls count against the run spend cap:
         paid API routes only, never self-served ones."""
         model = getattr(self, "model", None)
-        return model is not None and getattr(model, "jurisdiction", "self") != "self"
+        return model is not None and getattr(model, "jurisdiction", "us") != "self"
 
     def _output_hint(self, kwargs: dict) -> Optional[int]:
         """The per-call ``expected_output_tokens``, else the instance's."""
@@ -666,14 +676,27 @@ class BaseLLMService(ABC):
         return hint
 
     def _spend_estimate(self, name: str, args: tuple, kwargs: dict) -> float:
-        """Estimated cost of one guarded call, from its arguments."""
+        """Estimated cost of one guarded call, for spend-cap admission (see
+        ``llm_utils.spend``): messages plus the system prompt per request as
+        input; per request output = ``expected_output_tokens``, else the
+        smaller of the output budget and ``spend_cap.assumed_output_tokens``."""
+        from . import config
         if name == "chat_structured":
             prompt = args[0] if args else kwargs.get("prompt", "")
+            system = args[2] if len(args) > 2 else kwargs.get("system_message")
             conversations = [("_one", [(prompt, None)])]
         else:
             conversations = args[0] if args else kwargs.get("conversations", [])
-        max_tokens = kwargs.get("max_tokens", getattr(self, "max_tokens", 0))
-        return self._estimate_cost_usd(conversations, max_tokens, self._output_hint(kwargs))
+            system = args[1] if len(args) > 1 else kwargs.get("system_message")
+        max_tokens = kwargs.get("max_tokens", getattr(self, "max_tokens", 0)) or 0
+        budget = getattr(self, "_output_budget", None)
+        ceiling = budget(max_tokens) if callable(budget) else max_tokens
+        hint = self._output_hint(kwargs)
+        per_request = hint if hint is not None else min(
+            ceiling, config.get("spend_cap.assumed_output_tokens"))
+        system_usd = (len(conversations) * (len(system or "") // _EST_CHARS_PER_TOKEN)
+                      * self.model.input_price / 1_000_000)
+        return self._estimate_cost_usd(conversations, ceiling, per_request) + system_usd
 
     def _supports_native_batch(self) -> bool:
         """Whether this service can reach a native batch API. Overridden by

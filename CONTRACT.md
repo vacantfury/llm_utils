@@ -3,16 +3,32 @@
 *RENDERED from `contract.yaml` by `psyche.oikos contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
 - **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
-- **last tag:** v8.2.0 · **pyproject version:** 8.3.0
+- **last tag:** v8.3.0 · **pyproject version:** 9.0.0
 - **consume it as:** a pinned git dependency by tag in your `pyproject.toml` (charter §3.7); bump only after reading the changelog section for every tag you skip.
 
 ## Public seams
 
 ### `python-api` — python-api
-The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change.
+The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change. (v9.0.0+) Paid calls are admitted against a per-process spend cap before sending (SpendCapExceededError, an AccountFatalError); llm_utils.testing is the consumer test kit (explicit import).
 - package `llm_utils` — public = the declared list below
   - `llm_utils.call_ledger`
   - `llm_utils.config`
+  - `llm_utils.spend`
+  - `llm_utils.testing`
+  - `llm_utils.SpendStatus`
+  - `llm_utils.spend_status`
+  - `llm_utils.max_usd_per_run`
+  - `llm_utils.reset_run_spend`
+  - `llm_utils.SpendCapExceededError`
+  - `llm_utils.RetentionPolicyError`
+  - `llm_utils.TypeSafeService`
+  - `llm_utils.Evaluation`
+  - `llm_utils.NoulAnswer`
+  - `llm_utils.ChoiceAnswer`
+  - `llm_utils.ScoreAnswer`
+  - `llm_utils.noul_question`
+  - `llm_utils.choice_question`
+  - `llm_utils.score_question`
   - `llm_utils.RouteStatus`
   - `llm_utils.RegistryRouteResolver`
   - `llm_utils.logical_models`
@@ -78,7 +94,56 @@ The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_poi
 - psyche @ v8.1.0
 
 ## Changelog head (`[Unreleased]`)
-### v8.3.0 (MINOR: new capability, additive)
+### v9.0.0 (MAJOR: breaking default)
+
+**Changed (breaking):** paid API calls are capped per process. Every paid entry
+point (`batch_chat`, `chat`, `achat`, `chat_structured`,
+`batch_chat_with_logprobs`, `submit_batch_chat`) is admitted before sending
+against `spend_cap.max_usd_per_run`, default **$5.00**: recorded spend plus
+in-flight estimates plus unharvested batch estimates plus this call's estimate
+(messages and system prompt as input; per request `expected_output_tokens`,
+else the smaller of the output budget and `spend_cap.assumed_output_tokens`,
+default 1024).
+Past it the call raises `SpendCapExceededError` (subclass of
+`AccountFatalError`) and nothing is sent. Self-served routes (local, SLURM)
+are never capped or counted.
+
+**Migration:** a process meant to spend more than $5 of API calls sets
+`LLM_UTILS_MAX_USD_PER_RUN=<dollars>` (or `none`) in its launcher, or
+`spend_cap: {max_usd_per_run: <dollars>}` in the project's `llm_utils.yaml`.
+Reasoning-model callers with a large `max_tokens` pass
+`expected_output_tokens` so the pre-call estimate is realistic. Test suites
+that record fake costs call `reset_run_spend()` between tests or set the env
+var to `none`.
+
+**Added:**
+
+- `llm_utils.spend` and seam exports `SpendCapExceededError`, `SpendStatus`,
+  `spend_status()`, `max_usd_per_run()`, `reset_run_spend()`;
+  `spend.settle_batch(batch_id)` drops a submitted batch's held estimate when
+  it is harvested by another process or abandoned.
+- `expected_output_tokens` (service constructor kwarg or per-call kwarg): the
+  per-request output size used by cost ESTIMATES (native-batch auto-routing
+  and the spend cap); never sent to the provider. Unset = `max_tokens`, so
+  existing routing does not move.
+- `llm_utils.testing` (explicit import, not a pytest plugin): `FakeService`,
+  `FakeCall`, `use_fake_service(...)` (patches `LLMServiceFactory.create`),
+  `check_exception_contract(expected=None)` (pass your own
+  `{"Name": "Base"}` copy of the parts you rely on) and `EXCEPTION_CONTRACT`.
+- `[tool.pytest.ini_options]`: `testpaths`, markers `live`/`slow`/`eval`/
+  `quarantine`, excluded by default.
+- **TypeSafe Jev typed evaluation:** `Provider.TYPESAFE` (jurisdiction `us`),
+  `LLMModel.JEV_1_13_0` ($0.042 per 1M input tokens, output free),
+  `TypeSafeService.evaluate(state, questions, *, personal_data=False)` /
+  `aevaluate`, question builders `noul_question` / `choice_question` /
+  `score_question`, answer types `Evaluation` / `NoulAnswer` /
+  `ChoiceAnswer` / `ScoreAnswer`, and `RetentionPolicyError` (personal data
+  refused unless the service was built with `zero_retention=True`). Raw
+  HTTP, no SDK dependency; env `TYPESAFE_API_KEY`; usage and cost recorded
+  like every other service; the spend cap applies. `route_status` probes it
+  at `GET /v1/models`, and reports broker mode as unusable for it.
+
+## v8.3.0 — 2026-09-27 (MINOR: new capability, additive)
 
 **Added:**
 

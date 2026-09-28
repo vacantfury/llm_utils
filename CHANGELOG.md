@@ -11,7 +11,10 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 point (`batch_chat`, `chat`, `achat`, `chat_structured`,
 `batch_chat_with_logprobs`, `submit_batch_chat`) is admitted before sending
 against `spend_cap.max_usd_per_run`, default **$5.00**: recorded spend plus
-in-flight estimates plus unharvested batch estimates plus this call's estimate.
+in-flight estimates plus unharvested batch estimates plus this call's estimate
+(messages and system prompt as input; per request `expected_output_tokens`,
+else the smaller of the output budget and `spend_cap.assumed_output_tokens`,
+default 1024).
 Past it the call raises `SpendCapExceededError` (subclass of
 `AccountFatalError`) and nothing is sent. Self-served routes (local, SLURM)
 are never capped or counted.
@@ -27,14 +30,17 @@ var to `none`.
 **Added:**
 
 - `llm_utils.spend` and seam exports `SpendCapExceededError`, `SpendStatus`,
-  `spend_status()`, `max_usd_per_run()`, `reset_run_spend()`.
+  `spend_status()`, `max_usd_per_run()`, `reset_run_spend()`;
+  `spend.settle_batch(batch_id)` drops a submitted batch's held estimate when
+  it is harvested by another process or abandoned.
 - `expected_output_tokens` (service constructor kwarg or per-call kwarg): the
   per-request output size used by cost ESTIMATES (native-batch auto-routing
   and the spend cap); never sent to the provider. Unset = `max_tokens`, so
   existing routing does not move.
 - `llm_utils.testing` (explicit import, not a pytest plugin): `FakeService`,
   `FakeCall`, `use_fake_service(...)` (patches `LLMServiceFactory.create`),
-  `check_exception_contract()` and `EXCEPTION_CONTRACT`.
+  `check_exception_contract(expected=None)` (pass your own
+  `{"Name": "Base"}` copy of the parts you rely on) and `EXCEPTION_CONTRACT`.
 - `[tool.pytest.ini_options]`: `testpaths`, markers `live`/`slow`/`eval`/
   `quarantine`, excluded by default.
 - **TypeSafe Jev typed evaluation:** `Provider.TYPESAFE` (jurisdiction `us`),

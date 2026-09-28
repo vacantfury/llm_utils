@@ -16,6 +16,11 @@ PAID = LLMModel.GPT_4O          # $2.50 / $10.00 per 1M tokens
 SELF = LLMModel.LLAMA3_8B_CLUSTER
 
 
+def _admit_est(svc, text="x" * 400, n=1, system=None, **kw):
+    """The admission estimate the guard uses for a batch_chat of n prompts."""
+    return svc._spend_estimate("batch_chat", ([(str(i), [(text, None)]) for i in range(n)], system), kw)
+
+
 def _est(svc, text="x" * 400, n=1, **kw):
     return svc._estimate_cost_usd([(str(i), [(text, None)]) for i in range(n)],
                                   kw.get("max_tokens", svc.max_tokens),
@@ -67,7 +72,7 @@ class TestAdmission:
 
     def test_spend_accumulates_until_the_cap(self, monkeypatch):
         fake = FakeService(PAID, responses="y" * 400, max_tokens=100)
-        per_call = _est(fake, "x" * 400)
+        per_call = _admit_est(fake, "x" * 400)
         monkeypatch.setenv(spend.MAX_USD_ENV, str(per_call * 2.5))
         fake.chat("x" * 400)
         fake.chat("x" * 400)
@@ -87,7 +92,7 @@ class TestAdmission:
         seen = []
         fake = FakeService(PAID, responses=lambda text, cid: seen.append(spend_status().reserved) or "ok")
         fake.chat("hello")                            # chat -> batch_chat, both guarded
-        assert seen[0] == pytest.approx(_est(fake, "hello"))
+        assert seen[0] == pytest.approx(_admit_est(fake, "hello"))
 
     def test_real_service_refuses_without_touching_the_client(self, monkeypatch):
         monkeypatch.setenv(spend.MAX_USD_ENV, "0")
@@ -116,12 +121,55 @@ class TestAdmission:
         fake = BatchFake(PAID)
         assert fake.submit_batch_chat([("a", [("x" * 400, None)])]) == "batch-1"
         held = spend_status().committed
-        assert held == pytest.approx(_est(fake, "x" * 400) * fake.BATCH_COST_DISCOUNT)
+        assert held == pytest.approx(_admit_est(fake, "x" * 400) * fake.BATCH_COST_DISCOUNT)
         assert fake.harvest_batch_chat("batch-1") is None
         assert spend_status().committed == held
         fake.done = True
         fake.harvest_batch_chat("batch-1")
         assert spend_status().committed == 0
+
+    def test_admission_assumes_realistic_output_not_max_tokens(self):
+        fake = FakeService(PAID, max_tokens=16384)
+        assumed = config.get("spend_cap.assumed_output_tokens")
+        est = _admit_est(fake, "", n=1000)
+        assert est == pytest.approx(1000 * assumed * PAID.output_price / 1e6)
+        small = FakeService(PAID, max_tokens=50)       # a smaller budget still caps it
+        assert _admit_est(small, "", n=1) == pytest.approx(50 * PAID.output_price / 1e6)
+
+    def test_system_prompt_counts_once_per_request(self):
+        fake = FakeService(PAID, max_tokens=1)
+        base = _admit_est(fake, "", n=10)
+        with_sys = _admit_est(fake, "", n=10, system="s" * 4000)
+        assert with_sys - base == pytest.approx(10 * 1000 * PAID.input_price / 1e6)
+
+    def test_thinking_headroom_raises_the_ceiling(self):
+        from llm_utils import ModelQuirk
+        from llm_utils.llm_services import ClaudeService
+        model = next(m for m in LLMModel if m.provider.value == "anthropic"
+                     and m.has_quirk(ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET))
+        svc = ClaudeService(model, api_key="k", max_tokens=100)
+        est = svc._spend_estimate("batch_chat", ([("a", [("", None)])],), {})
+        assert est > 100 * model.output_price / 1e6    # budget is max_tokens + headroom
+
+    def test_recorded_cost_draws_the_reservation_down(self, monkeypatch):
+        monkeypatch.setenv(spend.MAX_USD_ENV, "100")
+        seen = []
+
+        def responder(text, cid):
+            seen.append(spend_status())
+            return "y" * 4000
+
+        fake = FakeService(PAID, responses=responder, max_tokens=4096)
+        fake.batch_chat([("a", [("x", None)]), ("b", [("x", None)])])
+        first, second = seen
+        assert second.spent > 0
+        assert second.reserved == pytest.approx(first.reserved - second.spent)
+
+    def test_generator_conversations_survive_the_estimate(self, monkeypatch):
+        monkeypatch.setenv(spend.MAX_USD_ENV, "100")
+        fake = FakeService(PAID, responses="ok")
+        out = fake.batch_chat((c for c in [("a", [("hi", None)]), ("b", [("yo", None)])]))
+        assert [cid for cid, _ in out] == ["a", "b"]
 
     def test_reset(self):
         spend.record(3.0)
@@ -156,7 +204,7 @@ class TestOutputHint:
 
     def test_hint_tightens_the_cap_check(self, monkeypatch):
         fake = FakeService(PAID, responses="ok", max_tokens=16384)
-        monkeypatch.setenv(spend.MAX_USD_ENV, str(_est(fake, "hi") / 2))
+        monkeypatch.setenv(spend.MAX_USD_ENV, str(_admit_est(fake, "hi") / 2))
         with pytest.raises(SpendCapExceededError):
             fake.chat("hi")
         assert fake.chat("hi", expected_output_tokens=10) == "ok"

@@ -66,7 +66,8 @@ class FakeService(BaseLLMService):
 
     ``responses`` decides each answer:
 
-    - a string: every request gets it;
+    - a string (or any single object, e.g. a pydantic instance for
+      ``chat_structured``): every request gets it;
     - a list (or any iterable): answers in order, one per request; running out
       raises ``AssertionError``;
     - a dict: keyed by conversation id, else by the request's last message
@@ -98,7 +99,7 @@ class FakeService(BaseLLMService):
         self.default = default
         self.calls: List[FakeCall] = []
         self._responses = responses
-        if responses is not None and not isinstance(responses, (str, dict)) and not callable(responses):
+        if isinstance(responses, (list, tuple, deque)) or hasattr(responses, "__next__"):
             self._responses = deque(responses)
 
     # -- answers -----------------------------------------------------------
@@ -107,8 +108,6 @@ class FakeService(BaseLLMService):
         r = self._responses
         if r is None:
             return self.default
-        if isinstance(r, str):
-            return r
         if isinstance(r, dict):
             if cid in r:
                 return r[cid]
@@ -118,7 +117,9 @@ class FakeService(BaseLLMService):
                 raise AssertionError(
                     f"FakeService: no scripted response left for request {cid!r} ({text[:60]!r})")
             return r.popleft()
-        return r(text, cid)
+        if callable(r) and not isinstance(r, (str, BaseException)) and not isinstance(r, type):
+            return r(text, cid)
+        return r                           # one constant answer (a string, an object, an exception)
 
     def _usage(self, text: str, answer: str) -> Tuple[int, int, float]:
         in_tok = max(1, len(text) // _CHARS_PER_TOKEN)
@@ -237,10 +238,19 @@ EXCEPTION_CONTRACT: Dict[type, type] = {
 _DISJOINT = ((FatalModelError, AccountFatalError),)
 
 
-def check_exception_contract() -> None:
+def check_exception_contract(expected: Optional[Dict[str, str]] = None) -> None:
     """Raise ``AssertionError`` naming every break in the exception contract:
     a class missing from the public seam, a changed base, or two run-level
-    classes that became related. Call it from the consumer's own suite."""
+    classes that became related. Call it from the consumer's own suite.
+
+    ``expected`` is the consumer's OWN copy of the parts it relies on, by
+    name (``{"SpendCapExceededError": "AccountFatalError"}``; a builtin base
+    such as ``"PermissionError"`` is allowed). Pass it: the packaged
+    ``EXCEPTION_CONTRACT`` ships with the library it checks, so a release
+    that broke the hierarchy and edited the table in the same commit would
+    still pass without it.
+    """
+    import builtins
     import llm_utils
 
     problems = []
@@ -250,8 +260,19 @@ def check_exception_contract() -> None:
             problems.append(f"llm_utils.{exc.__name__} is not exported from the seam")
         if not (inspect.isclass(exc) and issubclass(exc, base)):
             problems.append(f"{exc.__name__} no longer subclasses {base.__name__}")
+    for name, base_name in (expected or {}).items():
+        exc = getattr(llm_utils, name, None)
+        base = getattr(llm_utils, base_name, None) or getattr(builtins, base_name, None)
+        if not inspect.isclass(exc):
+            problems.append(f"llm_utils.{name} is not exported from the seam")
+        elif not (inspect.isclass(base) and issubclass(exc, base)):
+            problems.append(f"{name} no longer subclasses {base_name}")
     for a, b in _DISJOINT:
         if issubclass(a, b) or issubclass(b, a):
             problems.append(f"{a.__name__} and {b.__name__} became related")
+        for name in llm_utils.__all__:
+            obj = getattr(llm_utils, name, None)
+            if inspect.isclass(obj) and issubclass(obj, a) and issubclass(obj, b):
+                problems.append(f"{name} subclasses both {a.__name__} and {b.__name__}")
     if problems:
         raise AssertionError("llm_utils exception contract broken: " + "; ".join(problems))

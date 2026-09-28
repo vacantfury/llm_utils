@@ -46,6 +46,17 @@ class TestFakeService:
         obj = object()
         assert FakeService(responses=[obj]).chat_structured("p", dict) is obj
 
+    def test_a_single_object_is_a_constant_answer(self):
+        from dataclasses import dataclass
+
+        @dataclass
+        class Verdict:
+            label: str = "safe"
+
+        v = Verdict()
+        fake = FakeService(responses=v)
+        assert fake.chat_structured("a", Verdict) is v and fake.chat_structured("b", Verdict) is v
+
     def test_usage_is_priced_from_the_registry(self):
         fake = FakeService(LLMModel.GPT_4O, responses="y" * 40)
         fake.chat("x" * 400)
@@ -97,6 +108,20 @@ class TestExceptionContract:
         broken[llm_utils.FatalModelError] = llm_utils.AccountFatalError
         monkeypatch.setattr(testing, "EXCEPTION_CONTRACT", broken)
         with pytest.raises(AssertionError, match="FatalModelError no longer subclasses"):
+            check_exception_contract()
+
+    def test_consumer_supplied_contract(self):
+        check_exception_contract({"SpendCapExceededError": "AccountFatalError",
+                                  "ClaudeAPINotAllowed": "PermissionError"})
+        with pytest.raises(AssertionError, match="FatalModelError no longer subclasses"):
+            check_exception_contract({"FatalModelError": "AccountFatalError"})
+
+    def test_detects_a_class_under_both_roots(self, monkeypatch):
+        class Both(llm_utils.FatalModelError, llm_utils.AccountFatalError):
+            pass
+        monkeypatch.setattr(llm_utils, "Both", Both, raising=False)
+        monkeypatch.setattr(llm_utils, "__all__", llm_utils.__all__ + ["Both"])
+        with pytest.raises(AssertionError, match="Both subclasses both"):
             check_exception_contract()
 
     def test_detects_a_missing_export(self, monkeypatch):

@@ -341,12 +341,14 @@ LLM_UTILS_MAX_USD_PER_RUN=none python ...           # no cap
 Or set `spend_cap: {max_usd_per_run: 40}` in the project's `llm_utils.yaml`.
 `spend_status()` shows spent / reserved / committed / cap.
 
-The estimate assumes the full `max_tokens` of output per request unless the
-caller passes `expected_output_tokens` (per call, or to the service
-constructor). Reasoning models need a large `max_tokens` to hold hidden
-reasoning; pass their realistic output size so neither the cap nor the
-native-batch auto-routing overestimates the job. Unset, routing behaves
-exactly as before.
+The admission estimate counts the messages and the system prompt as input
+and, per request, `expected_output_tokens` if the caller passes it (per call,
+or to the service constructor), else the smaller of the output budget and
+`spend_cap.assumed_output_tokens` (1024). The cap binds on recorded spend, so
+a low estimate lets at most the call in hand overshoot. Native-batch
+auto-routing also reads `expected_output_tokens`, but without it keeps
+estimating with the full `max_tokens`, exactly as before; reasoning models,
+whose `max_tokens` must hold hidden reasoning, should pass it.
 
 ## Testing your code against llm_utils
 

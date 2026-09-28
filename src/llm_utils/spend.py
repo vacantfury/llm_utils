@@ -18,15 +18,18 @@ The cap, highest precedence first:
    ``configure(spend_cap={...})`` call);
 3. the packaged default in ``defaults.yaml``.
 
-The per-call estimate is the service's ``_estimate_cost_usd``: character-count
-input tokens and ``max_tokens`` output per request unless the caller passes
-``expected_output_tokens``. It is an upper bound for most calls, so the cap
-errs toward refusing; reasoning-model callers pass a realistic
-``expected_output_tokens`` to avoid refusals caused by a large ``max_tokens``.
+The per-call estimate (``BaseLLMService._spend_estimate``): character-count
+input tokens (messages plus the system prompt, once per request) and, per
+request, ``expected_output_tokens`` when the caller passes it, else the
+smaller of the output budget (``max_tokens``, plus thinking headroom on
+thinking models) and ``spend_cap.assumed_output_tokens``. It is a realistic
+figure, not a worst case: the cap binds on RECORDED spend, so an estimate
+that runs low lets at most the call in hand overshoot.
 """
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import math
 import os
 import threading
@@ -43,6 +46,20 @@ _spent = 0.0
 _reserved = 0.0
 _committed: Dict[str, float] = {}
 _local = threading.local()
+
+
+class Hold:
+    """One admitted call's reservation. Costs recorded while the call runs
+    (in its context) draw the reservation down, so in-flight spend is never
+    counted twice."""
+    __slots__ = ("estimate", "remaining")
+
+    def __init__(self, estimate: float):
+        self.estimate = estimate
+        self.remaining = estimate
+
+
+_current: contextvars.ContextVar = contextvars.ContextVar("llm_utils_spend_hold", default=None)
 
 
 @dataclass(frozen=True)
@@ -101,14 +118,20 @@ def reset_run_spend() -> None:
 
 
 def record(cost: float) -> None:
-    """Add a completed call's actual cost (called by ``_record_usage``)."""
-    global _spent
+    """Add a completed call's actual cost (called by ``_record_usage``); a
+    cost recorded inside an admitted call draws that call's reservation down."""
+    global _spent, _reserved
     if cost:
+        hold = _current.get()
         with _lock:
             _spent += cost
+            if hold is not None and hold.remaining > 0:
+                take = min(cost, hold.remaining)
+                hold.remaining -= take
+                _reserved = max(0.0, _reserved - take)
 
 
-def admit(estimate: float, what: str) -> float:
+def admit(estimate: float, what: str) -> Hold:
     """Reserve ``estimate`` for a call about to be sent, or raise
     ``SpendCapExceededError`` without reserving anything."""
     global _reserved
@@ -129,14 +152,15 @@ def admit(estimate: float, what: str) -> float:
                     f"tighten the estimate.",
                     estimate=estimate, spent=_spent, cap=cap)
         _reserved += estimate
-    return estimate
+    return Hold(estimate)
 
 
-def release(estimate: float) -> None:
-    """Drop a reservation once its call has finished (its real cost was recorded)."""
+def release(hold: Hold) -> None:
+    """Drop what is left of a reservation once its call has finished."""
     global _reserved
     with _lock:
-        _reserved = max(0.0, _reserved - estimate)
+        _reserved = max(0.0, _reserved - hold.remaining)
+        hold.remaining = 0.0
 
 
 def commit_batch(batch_id: str, estimate: float) -> None:
@@ -146,7 +170,9 @@ def commit_batch(batch_id: str, estimate: float) -> None:
 
 
 def settle_batch(batch_id: str) -> None:
-    """A harvested batch's real cost is recorded; drop its held estimate."""
+    """A harvested batch's real cost is recorded; drop its held estimate.
+    Called automatically by ``harvest_batch_chat``; call it yourself when a
+    batch submitted by this process is harvested elsewhere or abandoned."""
     with _lock:
         _committed.pop(str(batch_id), None)
 
@@ -156,12 +182,15 @@ def in_guard() -> bool:
 
 
 @contextlib.contextmanager
-def guarded() -> Iterator[None]:
+def guarded(hold: Optional[Hold] = None) -> Iterator[None]:
     """Mark this thread as inside an admitted call, so nested seam calls
     (``chat`` -> ``batch_chat``, an override calling ``super()``) are not
-    admitted twice."""
+    admitted twice; ``hold`` receives the costs recorded meanwhile."""
     _local.depth = getattr(_local, "depth", 0) + 1
+    token = _current.set(hold) if hold is not None else None
     try:
         yield
     finally:
+        if token is not None:
+            _current.reset(token)
         _local.depth -= 1

@@ -26,3 +26,12 @@ spend_cap:
   # grouped by launch point and process); keep the cap above routine
   # processes' spend and below the smallest sweep that needed approval.
   max_usd_per_run: 5.0
+  # Output tokens per request the pre-call estimate assumes when the caller
+  # gives no expected_output_tokens (capped by the request's output budget).
+  # Basis for 1024: judge / classification / extraction answers run to a few
+  # hundred tokens, short reasoning to about a thousand; the full max_tokens
+  # (4096-16384) overstated such jobs 10-40x and refused $0.40 jobs under a
+  # $5 cap. Only admission uses it; batch auto-routing keeps max_tokens.
+  # Tuning path: the call ledger's p95 output tokens per request by model
+  # (rows carry output_tokens), recomputed as usage accumulates.
+  assumed_output_tokens: 1024
