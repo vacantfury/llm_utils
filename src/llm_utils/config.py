@@ -28,7 +28,7 @@ PROJECT_FILE = "llm_utils.yaml"
 
 # Keys whose value may be null (off). Every other override must keep the
 # packaged default's type: a number for a number, a string for a string.
-NULLABLE: frozenset = frozenset()
+NULLABLE: frozenset = frozenset({"spend_cap.max_usd_per_run"})
 
 _lock = threading.Lock()
 _cache: Optional[dict] = None

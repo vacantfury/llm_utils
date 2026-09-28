@@ -40,3 +40,13 @@ packages = ["src/llm_utils"]
 dev = [
     "pytest>=8",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: needs network or real keys (never in the default run)",
+    "slow: long-running",
+    "eval: judged evaluation cases",
+    "quarantine: known-flaky, excluded by default",
+]
+addopts = "-m 'not live and not slow and not eval and not quarantine'"

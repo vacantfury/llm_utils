@@ -296,6 +296,51 @@ with a YAML file of the same shape holding only the keys you change: point
 by an upward search from the working directory). A process can also call
 `llm_utils.config.configure(section={...})`. Unknown keys raise at load.
 
+## Run spend cap
+
+Every paid API call is admitted before it is sent: the process's recorded
+spend, plus the estimates of calls in flight and of submitted but unharvested
+native batches, plus this call's estimate, must stay within
+`spend_cap.max_usd_per_run` (default $5.00). Otherwise the call raises
+`SpendCapExceededError` (an `AccountFatalError`, so runners abort the run) and
+nothing is sent. Self-served routes (local, SLURM) are never capped.
+
+```bash
+LLM_UTILS_MAX_USD_PER_RUN=40 python run_sweep.py   # an approved larger run
+LLM_UTILS_MAX_USD_PER_RUN=none python ...           # no cap
+```
+
+Or set `spend_cap: {max_usd_per_run: 40}` in the project's `llm_utils.yaml`.
+`spend_status()` shows spent / reserved / committed / cap.
+
+The estimate assumes the full `max_tokens` of output per request unless the
+caller passes `expected_output_tokens` (per call, or to the service
+constructor). Reasoning models need a large `max_tokens` to hold hidden
+reasoning; pass their realistic output size so neither the cap nor the
+native-batch auto-routing overestimates the job. Unset, routing behaves
+exactly as before.
+
+## Testing your code against llm_utils
+
+```python
+from llm_utils.testing import FakeService, use_fake_service, check_exception_contract
+
+def test_my_judge():
+    fake = FakeService(LLMModel.GPT_5_MINI, responses={"q1": "unsafe"})
+    with use_fake_service(fake):          # LLMServiceFactory.create returns the fake
+        run_my_judge()
+    assert fake.calls[0].conversation_id == "q1"
+
+def test_llm_utils_exception_contract():
+    check_exception_contract()            # fails if a pinned bump flattens the hierarchy
+```
+
+`FakeService` follows the real services' return and error contract (a
+transport exception becomes a mechanism-error string; account-fatal errors
+raise), prices usage from the registry, calls your usage hook if one is
+installed, never writes the default call ledger, and goes through the spend
+cap for paid models.
+
 ## Credentials
 
 Plain environment variables only — no secret files, no secret-manager

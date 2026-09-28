@@ -39,6 +39,8 @@ from .claude_api_policy import (
 from . import call_ledger
 # Package configuration (packaged YAML defaults + per-project override)
 from . import config
+# Run spend cap on paid API calls (config spend_cap.max_usd_per_run)
+from .spend import SpendStatus, spend_status, max_usd_per_run, reset_run_spend
 # Route availability: logical model -> serving routes, usable here or not
 from .routes import (
     RouteStatus,
@@ -57,6 +59,7 @@ from .exceptions import (
     CreditsExhaustedError,
     BrokerError,
     BrokerModeUnsupportedError,
+    SpendCapExceededError,
 )
 
 # Concrete service implementations — ALL serving routes are part of the
@@ -86,6 +89,12 @@ __all__ = [
     'call_ledger',
     # Configuration (YAML defaults + per-project override)
     'config',
+    # Run spend cap
+    'SpendStatus',
+    'spend_status',
+    'max_usd_per_run',
+    'reset_run_spend',
+    'SpendCapExceededError',
     # Route availability
     'RouteStatus',
     'RegistryRouteResolver',

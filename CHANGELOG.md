@@ -3,6 +3,41 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+### v9.0.0 (MAJOR: breaking default)
+
+**Changed (breaking):** paid API calls are capped per process. Every paid entry
+point (`batch_chat`, `chat`, `achat`, `chat_structured`,
+`batch_chat_with_logprobs`, `submit_batch_chat`) is admitted before sending
+against `spend_cap.max_usd_per_run`, default **$5.00**: recorded spend plus
+in-flight estimates plus unharvested batch estimates plus this call's estimate.
+Past it the call raises `SpendCapExceededError` (subclass of
+`AccountFatalError`) and nothing is sent. Self-served routes (local, SLURM)
+are never capped or counted.
+
+**Migration:** a process meant to spend more than $5 of API calls sets
+`LLM_UTILS_MAX_USD_PER_RUN=<dollars>` (or `none`) in its launcher, or
+`spend_cap: {max_usd_per_run: <dollars>}` in the project's `llm_utils.yaml`.
+Reasoning-model callers with a large `max_tokens` pass
+`expected_output_tokens` so the pre-call estimate is realistic. Test suites
+that record fake costs call `reset_run_spend()` between tests or set the env
+var to `none`.
+
+**Added:**
+
+- `llm_utils.spend` and seam exports `SpendCapExceededError`, `SpendStatus`,
+  `spend_status()`, `max_usd_per_run()`, `reset_run_spend()`.
+- `expected_output_tokens` (service constructor kwarg or per-call kwarg): the
+  per-request output size used by cost ESTIMATES (native-batch auto-routing
+  and the spend cap); never sent to the provider. Unset = `max_tokens`, so
+  existing routing does not move.
+- `llm_utils.testing` (explicit import, not a pytest plugin): `FakeService`,
+  `FakeCall`, `use_fake_service(...)` (patches `LLMServiceFactory.create`),
+  `check_exception_contract()` and `EXCEPTION_CONTRACT`.
+- `[tool.pytest.ini_options]`: `testpaths`, markers `live`/`slow`/`eval`/
+  `quarantine`, excluded by default.
+
 ## v8.3.0 — 2026-09-27 (MINOR: new capability, additive)
 
 **Added:**
