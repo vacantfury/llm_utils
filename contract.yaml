@@ -1,6 +1,6 @@
 # llm_utils — consumer contract (charter §3.7 provider half). Machine-read truth; CONTRACT.md is rendered from it.
 provider: llm_utils
-version: 7.3.0
+version: 8.3.0
 version_policy: semver
 seams:
   - id: python-api
@@ -8,6 +8,19 @@ seams:
     package: llm_utils
     public:
       - llm_utils.call_ledger
+      - llm_utils.config
+      - llm_utils.RouteStatus
+      - llm_utils.RegistryRouteResolver
+      - llm_utils.logical_models
+      - llm_utils.route_models
+      - llm_utils.routes_for
+      - llm_utils.route_status
+      - llm_utils.available_routes
+      - llm_utils.usable_routes
+      - llm_utils.CLAUDE_API_ALLOW_ENV
+      - llm_utils.ClaudeAPINotAllowed
+      - llm_utils.claude_api_allowed
+      - llm_utils.is_claude_model
       - llm_utils.LLMModel
       - llm_utils.Provider
       - llm_utils.ModelQuirk
@@ -24,6 +37,8 @@ seams:
       - llm_utils.AccountFatalError
       - llm_utils.InvalidCredentialError
       - llm_utils.CreditsExhaustedError
+      - llm_utils.BrokerError
+      - llm_utils.BrokerModeUnsupportedError
       - llm_utils.OpenAIService
       - llm_utils.DeepSeekService
       - llm_utils.ZAIService
@@ -38,4 +53,18 @@ seams:
     consumers: [psyche, autoflow, auto_research, courier, prospector, ties, personal_trade, personal_passive_asset]
     note: |
       The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change.
-deprecations: []
+# Removed at v6.0.0 (the SLURM serving lifecycle moved to the device layer). Kept here so
+# consumers still pinned to v5.x see what the bump removes and where it went.
+deprecations:
+  - element: llm_utils.ClusterModelServerManager
+    since: v6.0.0
+    removed_in: v6.0.0
+    replacement: the device layer's endpoint manager, injected with LLMServiceFactory.set_server_manager(manager)
+  - element: llm_utils.cluster_server_manager
+    since: v6.0.0
+    removed_in: v6.0.0
+    replacement: the device layer's serving lifecycle (sbatch, endpoint pool, health); llm_utils keeps only SlurmClusterService
+  - element: llm_utils.constants.MAX_SLURM_TIME_LIMIT
+    since: v6.0.0
+    removed_in: v6.0.0
+    replacement: the device layer's per-cluster wall limits (partition facts)

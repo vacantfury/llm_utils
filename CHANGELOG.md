@@ -5,7 +5,9 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
-### Added
+### v8.3.0 (MINOR: new capability, additive)
+
+**Added:**
 
 - **Route availability** (`llm_utils.routes`, exported from the seam):
   `routes_for(logical)` returns the route names (provider values) registered
@@ -21,11 +23,15 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
   `configure(...)`; unknown keys raise. First knob: `routes.probe_timeout_s`.
   New core dependency: `pyyaml`.
 
-### Changed
+**Changed:**
 
 - `LLAMA3_8B` (local) and `LLAMA3_8B_CLUSTER` now share
   `weights="meta-llama-3-8b-instruct"`, so each lists the other in
   `route_twins()`.
+- `contract.yaml` declares the full `__all__` (the Claude API opt-in names and
+  the broker exceptions were missing) and lists the three v6.0.0 removals
+  (`ClusterModelServerManager`, `cluster_server_manager`,
+  `MAX_SLURM_TIME_LIMIT`) with where each went, for consumers still on v5.x.
 
 ## v8.2.0 — 2026-09-25 (MINOR: new capability, backward compatible)
 
