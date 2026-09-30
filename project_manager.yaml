@@ -1,0 +1,32 @@
+schema: 1 # derived: The declaration.load schema implemented by this package.
+builder: v0.1.0 # derived: The first admitted release; this rollout follows the v0.1.0 milestone.
+project: llm_utils # derived: the estate registry path for this project matches the checkout (including linked worktrees); registry key name withheld because this repo is public
+capabilities: # inferred: checkout and registry evidence
+  - library # reviewed: consumer repos pin this package by tag in their Python dependencies (design section 4); consumer names withheld because this repo is public
+facts:
+  relied_on: # reviewed: nothing added beyond the derived consumer pins
+    value: true
+    basis: "consumer repos pin tagged releases as their LLM-provider layer; the pins are derived, nothing further is declared"
+  trusted_state: # reviewed: the package holds code and packaged defaults only (src/llm_utils/defaults.yaml); no store of its own
+    value: true
+    basis: "derived from a registry reference-read edge into this package; the package itself holds code and packaged defaults only (src/llm_utils/defaults.yaml), and a declaration never contradicts a derived fact"
+  effects: [] # reviewed: no unattended job of its own; paid provider calls happen only when a consumer invokes them, under the per-run spend cap (src/llm_utils/spend.py:1-8); provider APIs are services, not third-party recipients
+validation: # inferred: evidence-supported checks only; adequacy needs review. Empty scaffolding only; absence of declared gaps is not coverage evidence.
+  checks:
+    - {id: tests, run: [uv, run, pytest, -q], stages: [merge, ci, release, repair], covers: [code]} # inferred: tests/ and a pyproject.toml pytest dependency support the standard keyless command.
+    - {id: contract, builtin: contract, stages: [release]} # derived: contract.yaml exists; the builtin checks the provider contract at release.
+  gaps: # reviewed: marker and skip evidence; coverage not measured
+    - "no test carries the live marker (pyproject.toml:46-52), so real provider endpoints are never exercised; the keyless suite uses fakes (.github/workflows/tests.yml:1)"
+    - "the cluster-model factory test skips when no SLURM_CLUSTER model is registered (tests/test_factory.py:51)"
+ci: # derived: Literal main push/tag filters and schedules in existing GitHub workflows; no workflow is executed. Weekly test clock membership in the estate registry
+  triggers:
+    - main # derived: .github/workflows/tests.yml on.push.branches
+    - tags # derived: .github/workflows/tests.yml on.push.tags
+  test_clock:
+    cadence: weekly
+    basis: estate test clock weekly membership # reviewed: registry path withheld because this repo is public
+release: # inferred: highest local SemVer tag v9.0.0; CHANGELOG.md exists; source artifact for an evidenced library; contract.yaml exists
+  versioning: semver
+  changelog: CHANGELOG.md
+  artifact: source
+  contract: contract.yaml
