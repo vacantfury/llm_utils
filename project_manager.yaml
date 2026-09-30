@@ -18,6 +18,8 @@ validation: # inferred: evidence-supported checks only; adequacy needs review. E
   gaps: # reviewed: marker and skip evidence; coverage not measured
     - "no test carries the live marker (pyproject.toml:46-52), so real provider endpoints are never exercised; the keyless suite uses fakes (.github/workflows/tests.yml:1)"
     - "the cluster-model factory test skips when no SLURM_CLUSTER model is registered (tests/test_factory.py:51)"
+hygiene: # reviewed: no Ruff usage evidence (pyproject, ruff.toml, workflows, pre-commit); explicit off, since T1 and above declare hygiene (design section 4); ruff enters at design section 12 step 10
+  lint: {tool: ruff, mode: off}
 ci: # derived: Literal main push/tag filters and schedules in existing GitHub workflows; no workflow is executed. Weekly test clock membership in the estate registry
   triggers:
     - main # derived: .github/workflows/tests.yml on.push.branches
