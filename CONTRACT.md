@@ -1,6 +1,6 @@
 # llm_utils — consumer contract
 
-*RENDERED from `contract.yaml` by `psyche.oikos contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
+*RENDERED from `contract.yaml` by `project_manager contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
 - **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
 - **last tag:** v9.0.0 · **pyproject version:** 9.0.0
@@ -70,7 +70,7 @@ The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_poi
   - `llm_utils.LocalLMService`
   - `llm_utils.SlurmClusterService`
   - `llm_utils.BedrockService`
-- declared consumers: psyche, autoflow, auto_research, courier, prospector, ties, personal_trade, personal_passive_asset
+- declared consumers: psyche, agent_manager, autoflow, auto_research, courier, prospector, ties, personal_trade, personal_passive_asset
 
 ## Deprecations
 | element | since | removed in | replacement |

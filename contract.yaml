@@ -6,6 +6,26 @@ seams:
   - id: python-api
     kind: python-api
     package: llm_utils
+    tests:
+      - tests/test_factory.py::test_create_by_enum_and_by_string
+      - tests/test_factory.py::test_caller_kwargs_beat_loader_defaults
+      - tests/test_factory.py::test_label_sets_usage_label
+      - tests/test_registry.py
+      - tests/test_route_availability.py
+      - tests/test_account_status.py
+      - tests/test_call_ledger.py
+      - tests/test_failed_calls.py
+      - tests/test_spend_cap.py
+      - tests/test_typesafe_service.py
+      - tests/test_claude_api_policy.py
+      - tests/test_testing_kit.py
+    asserts: >-
+      Consumers can resolve registered models and serving routes, construct services
+      with caller configuration and usage labels, inspect route availability and
+      account balances, and receive typed evaluation answers.
+      Calls preserve usage and failure recording, enforce spend limits and direct
+      Claude API opt-in before sending, and support deterministic fake services
+      with the documented exception hierarchy.
     public:
       - llm_utils.call_ledger
       - llm_utils.config
@@ -66,7 +86,7 @@ seams:
       - llm_utils.LocalLMService
       - llm_utils.SlurmClusterService
       - llm_utils.BedrockService
-    consumers: [psyche, autoflow, auto_research, courier, prospector, ties, personal_trade, personal_passive_asset]
+    consumers: [psyche, agent_manager, autoflow, auto_research, courier, prospector, ties, personal_trade, personal_passive_asset]
     note: |
       The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change. (v9.0.0+) Paid calls are admitted against a per-process spend cap before sending (SpendCapExceededError, an AccountFatalError); llm_utils.testing is the consumer test kit (explicit import).
 # Removed at v6.0.0 (the SLURM serving lifecycle moved to the device layer). Kept here so
