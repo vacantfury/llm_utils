@@ -1,15 +1,20 @@
-"""Broker contract and SDK serialization against a keyless loopback server."""
+"""Broker contract and SDK serialization against a keyless in-process fake broker.
+
+The fake broker is an httpx MockTransport installed where both HTTP stacks (the
+broker's httpx2 control client and the SDKs' httpx clients) build their default
+transport, so no socket is opened, loopback included. Everything above the
+transport (client options, event hooks, route authentication) is the real code.
+"""
 import asyncio
 import builtins
 import json
 import os
-import threading
 import time
 from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import httpx
+import httpx2
 import pytest
 
 from llm_utils import (
@@ -45,70 +50,78 @@ KEYS = {
 CANARY = "synthetic-provider-key-must-never-be-read"
 
 
+# A fixed address the broker URL validator accepts; nothing ever listens on it.
+FAKE_BROKER_URL = "http://127.0.0.1:8765"
+
+
 @pytest.fixture
 def fake_broker(monkeypatch):
-    state = SimpleNamespace(requests=[], grants=[], revoked=[], status=200,
+    state = SimpleNamespace(requests=[], grants=[], revoked=[], status=200, url=FAKE_BROKER_URL,
                             grant_status=200, revoke_status=200, mutate=lambda g: g)
+    broker = httpx.URL(FAKE_BROKER_URL)
 
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
-            headers = dict(self.headers.items())
-            state.requests.append((self.path, headers, body))
-            code = 200
-            if self.path == "/grants":
-                code = state.grant_status
-                routes = body["routes"]
-                number = len(state.grants)
-                result = state.mutate(dict(id=str(number), surrogate=f"test-surrogate-{number}",
-                                          expires=time.time() + 3600, routes=routes,
-                                          base_paths={r: BASE_PATHS[r] for r in routes}))
-                state.grants.append(result)
-            elif self.path == "/revoke":
-                code = state.revoke_status
-                state.revoked.append(self.headers.get("authorization"))
-                result = {"revoked": True}
+    def respond(module, request):
+        if (request.url.scheme, request.url.host, request.url.port) != (
+                broker.scheme, broker.host, broker.port):
+            # Any other destination behaves like an address with no listener.
+            raise module.ConnectError("synthetic: no listener", request=request)
+        path = request.url.raw_path.decode()
+        body = json.loads(request.content)
+        headers = dict(request.headers.items())
+        state.requests.append((path, headers, body))
+        code = 200
+        if path == "/grants":
+            code = state.grant_status
+            routes = body["routes"]
+            number = len(state.grants)
+            result = state.mutate(dict(id=str(number), surrogate=f"test-surrogate-{number}",
+                                      expires=time.time() + 3600, routes=routes,
+                                      base_paths={r: BASE_PATHS[r] for r in routes}))
+            state.grants.append(result)
+        elif path == "/revoke":
+            code = state.revoke_status
+            state.revoked.append(request.headers.get("authorization"))
+            result = {"revoked": True}
+        else:
+            code = state.status
+            if path.startswith("/proxy/anthropic"):
+                result = dict(id="msg-test", type="message", role="assistant", model="test",
+                              content=[dict(type="text", text="ok")], stop_reason="end_turn",
+                              usage=dict(input_tokens=1, output_tokens=1))
+            elif path.startswith("/proxy/gemini"):
+                result = dict(candidates=[dict(content=dict(role="model", parts=[dict(text="ok")]))],
+                              usageMetadata=dict(promptTokenCount=1, candidatesTokenCount=1))
+            elif path.startswith("/proxy/bedrock"):
+                result = dict(output=dict(message=dict(content=[dict(text="ok")])),
+                              usage=dict(inputTokens=1, outputTokens=1))
             else:
-                code = state.status
-                if self.path.startswith("/proxy/anthropic"):
-                    result = dict(id="msg-test", type="message", role="assistant", model="test",
-                                  content=[dict(type="text", text="ok")], stop_reason="end_turn",
-                                  usage=dict(input_tokens=1, output_tokens=1))
-                elif self.path.startswith("/proxy/gemini"):
-                    result = dict(candidates=[dict(content=dict(role="model", parts=[dict(text="ok")]))],
-                                  usageMetadata=dict(promptTokenCount=1, candidatesTokenCount=1))
-                elif self.path.startswith("/proxy/bedrock"):
-                    result = dict(output=dict(message=dict(content=[dict(text="ok")])),
-                                  usage=dict(inputTokens=1, outputTokens=1))
-                else:
-                    result = dict(id="chat-test", object="chat.completion", created=0, model="test",
-                                  choices=[dict(index=0, message=dict(role="assistant", content="ok"),
-                                                finish_reason="stop")],
-                                  usage=dict(prompt_tokens=1, completion_tokens=1, total_tokens=2))
-            if code >= 400:
-                result = {"error": {"message": "synthetic refusal", "type": "server_error", "code": code}}
-            encoded = json.dumps(result).encode()
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(encoded)))
-            self.send_header("Set-Cookie", "ambient=must-not-return")
-            if 300 <= code < 400:
-                self.send_header("Location", state.url + "/redirect-target")
-            self.end_headers()
-            self.wfile.write(encoded)
+                result = dict(id="chat-test", object="chat.completion", created=0, model="test",
+                              choices=[dict(index=0, message=dict(role="assistant", content="ok"),
+                                            finish_reason="stop")],
+                              usage=dict(prompt_tokens=1, completion_tokens=1, total_tokens=2))
+        if code >= 400:
+            result = {"error": {"message": "synthetic refusal", "type": "server_error", "code": code}}
+        headers = {"Content-Type": "application/json", "Set-Cookie": "ambient=must-not-return"}
+        if 300 <= code < 400:
+            headers["Location"] = state.url + "/redirect-target"
+        return module.Response(code, headers=headers, content=json.dumps(result).encode())
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    state.url = f"http://127.0.0.1:{server.server_port}"
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    def refuse(module, request):
+        raise module.ConnectError("synthetic: no listener", request=request)
+
+    # Replace only the default and env-proxy transports: a caller-supplied transport,
+    # trust_env, proxy selection and every option above the transport stay real. A
+    # client that honoured the suite's synthetic proxy variables reaches `refuse`.
+    for module in (httpx, httpx2):
+        serve = module.MockTransport(lambda request, module=module: respond(module, request))
+        dead = module.MockTransport(lambda request, module=module: refuse(module, request))
+        for cls in (module.Client, module.AsyncClient):
+            monkeypatch.setattr(cls, "_init_transport", lambda self, *args, transport=None,
+                                serve=serve, **kwargs: serve if transport is None else transport)
+            monkeypatch.setattr(cls, "_init_proxy_transport",
+                                lambda self, *args, dead=dead, **kwargs: dead)
     monkeypatch.setenv("LLM_UTILS_BROKER_URL", state.url)
     yield state
-    server.shutdown()
-    server.server_close()
-    thread.join()
 
 
 @pytest.fixture
