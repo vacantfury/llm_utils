@@ -2,10 +2,14 @@
 dispatchable, string lookup unambiguous within a provider. No network."""
 
 import collections
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from llm_utils import LLMModel, LLMServiceFactory, Provider
+from llm_utils import LLMModel, LLMServiceFactory, ModelQuirk, Provider
+from llm_utils.base_llm_service import BaseLLMService
+from llm_utils.llm_services import OpenAIService
 
 # Serving routes we run ourselves — zero price is the convention there.
 _SELF_SERVED = {Provider.LOCAL, Provider.SLURM_CLUSTER}
@@ -73,6 +77,88 @@ def test_quirks_are_quirk_enum_members():
     for m in LLMModel:
         for q in getattr(m, "quirks", ()) or ():
             assert isinstance(q, ModelQuirk), (m.name, q)
+
+
+@pytest.mark.parametrize("name,model_id,input_price,output_price", [
+    ("GPT_6_LUNA", "gpt-6-luna", 0.10, 0.50),
+    ("GPT_6_SOL", "gpt-6-sol", 2.00, 10.00),
+    ("GPT_6_1_SOL", "gpt-6.1-sol", 2.00, 10.00),
+    ("GPT_6_ASTRA", "gpt-6-astra", 10.00, 50.00),
+])
+def test_gpt6_registry_rows(name, model_id, input_price, output_price):
+    model = LLMModel[name]
+    assert LLMModel.from_string(name) is model
+    assert LLMModel.from_string(model_id) is model
+    assert model.model_id == model_id
+    assert model.provider is Provider.OPENAI
+    assert model.input_price == input_price
+    assert model.output_price == output_price
+    assert model.has_quirk(ModelQuirk.USES_MAX_COMPLETION_TOKENS)
+    assert model.has_quirk(ModelQuirk.NO_CUSTOM_TEMPERATURE)
+
+
+@pytest.mark.parametrize("model_id,expected_cost", [
+    ("gpt-6-luna", 0.002),
+    ("gpt-6-sol", 0.04),
+    ("gpt-6.1-sol", 0.04),
+    ("gpt-6-astra", 0.20),
+])
+def test_gpt6_realtime_usage_cost(monkeypatch, model_id, expected_cost):
+    """Bill 10K input + 2K output tokens through the real accounting path."""
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(
+            message=SimpleNamespace(content="ok"), finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=10_000, completion_tokens=2_000),
+    )
+    create = AsyncMock(return_value=response)
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+    )
+    monkeypatch.setattr(
+        "llm_utils.llm_services.openai_service.AsyncOpenAI", lambda **kw: client)
+    # Keep synthetic usage out of any installed consumer's external ledger.
+    monkeypatch.setattr(BaseLLMService, "_usage_hook", lambda *a, **kw: None)
+    service = OpenAIService(
+        LLMModel.from_string(model_id), api_key="test-key-not-real",
+        use_batch_api=False,
+    )
+    assert service.chat("synthetic prompt", is_test=True) == "ok"
+    assert service.total_usage.inference_count == 1
+    assert service.total_usage.input_tokens == 10_000
+    assert service.total_usage.output_tokens == 2_000
+    assert service.total_usage.cost == pytest.approx(expected_cost)
+    create.assert_awaited_once()
+    params = create.call_args.kwargs
+    assert params["model"] == model_id
+    assert params["max_completion_tokens"] == service.max_tokens
+    assert "max_tokens" not in params
+    assert "temperature" not in params
+
+
+@pytest.mark.parametrize("name,model_id,input_price,output_price", [
+    ("DEEPSEEK_V4_FLASH", "deepseek-v4-flash", 0.30, 1.20),
+    ("DEEPSEEK_V4_PRO", "deepseek-v4-pro", 1.32, 3.96),
+])
+def test_deepseek_direct_peak_prices(name, model_id, input_price, output_price):
+    model = LLMModel[name]
+    assert LLMModel.from_string(name) is model
+    assert LLMModel.from_string(model_id) is model
+    assert model.provider is Provider.DEEPSEEK
+    assert model.input_price == input_price
+    assert model.output_price == output_price
+
+
+@pytest.mark.parametrize("name,model_id,input_price,output_price", [
+    ("OR_DEEPSEEK_V4_FLASH", "deepseek/deepseek-v4-flash", 0.0224, 1.28),
+    ("OR_DEEPSEEK_V4_PRO", "deepseek/deepseek-v4-pro", 0.2088, 0.4176),
+])
+def test_deepseek_openrouter_prices(name, model_id, input_price, output_price):
+    model = LLMModel[name]
+    assert LLMModel.from_string(name) is model
+    assert LLMModel.from_string(model_id) is model
+    assert model.provider is Provider.OPENROUTER
+    assert model.input_price == input_price
+    assert model.output_price == output_price
 
 
 def test_bedrock_claude_twins_share_temperature_quirk():

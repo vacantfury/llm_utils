@@ -229,6 +229,21 @@ class LLMModel(Enum):
     GPT_5_6_TERRA = ModelSpec("gpt-5.6-terra",  Provider.OPENAI, 2.50,  15.00, quirks=_GPT5_QUIRKS)
     GPT_5_6_LUNA  = ModelSpec("gpt-5.6-luna",   Provider.OPENAI, 1.00,  6.00,  quirks=_GPT5_QUIRKS)
 
+    # GPT-6 family: standard short-context prices, checked 2026-10-04 against
+    # https://developers.openai.com/api/docs/pricing and the model pages.
+    # Same default reasoning quirks as GPT-5.6. ModelSpec has no cache or
+    # context-tier pricing fields; those rates are documented in comments only.
+    # All prices are $/1M tokens; above 272K input tokens the higher rates
+    # apply to the ENTIRE request, not just the excess input tokens.
+    # Luna: cached input $0.01; long context $0.20/$0.75 (cached $0.02).
+    GPT_6_LUNA   = ModelSpec("gpt-6-luna",     Provider.OPENAI, 0.10,  0.50,  quirks=_GPT5_QUIRKS)
+    # Sol: cached input $0.20; long context $4/$15 (cached $0.40).
+    GPT_6_SOL    = ModelSpec("gpt-6-sol",      Provider.OPENAI, 2.00,  10.00, quirks=_GPT5_QUIRKS)
+    # Sol 6.1: cached input $0.10; long context $4/$15 (cached $0.20).
+    GPT_6_1_SOL  = ModelSpec("gpt-6.1-sol",    Provider.OPENAI, 2.00,  10.00, quirks=_GPT5_QUIRKS)
+    # Astra: cached input $1.00; long context $20/$75 (cached $2.00).
+    GPT_6_ASTRA  = ModelSpec("gpt-6-astra",    Provider.OPENAI, 10.00, 50.00, quirks=_GPT5_QUIRKS)
+
     # O-series reasoning models — same shape as GPT-5
     O1            = ModelSpec("o1",             Provider.OPENAI, 15.00, 60.00, quirks=_GPT5_QUIRKS)
     O3            = ModelSpec("o3",             Provider.OPENAI, 2.00,  8.00,  quirks=_GPT5_QUIRKS)
@@ -286,9 +301,17 @@ class LLMModel(Enum):
     GEMINI_3_5_FLASH_LITE          = ModelSpec("gemini-3.5-flash-lite",           Provider.GOOGLE, 0.30,  2.50)
     GEMINI_3_6_FLASH               = ModelSpec("gemini-3.6-flash",                Provider.GOOGLE, 1.50,  7.50, quirks=_THINKING_BUDGET)   # current flash flagship
 
-    # ──────── DeepSeek (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
-    DEEPSEEK_V4_FLASH = ModelSpec("deepseek-v4-flash", Provider.DEEPSEEK, 0.14,  0.28, family="deepseek", weights="deepseek-v4-flash")
-    DEEPSEEK_V4_PRO   = ModelSpec("deepseek-v4-pro",   Provider.DEEPSEEK, 0.435, 0.87, family="deepseek", weights="deepseek-v4-pro")
+    # ──────── DeepSeek (direct mainland, OpenAI-compatible) ────────
+    # Retired as a worker (2026-10-04); retained only for research where the
+    # model itself is under study, with no personal data.
+    # Peak cache-miss prices keep recorded costs an upper bound. Checked
+    # 2026-10-04: https://api-docs.deepseek.com/quick_start/pricing/
+    # V4-Flash is retired; this legacy id now serves DeepSeek-V4.1-Flash.
+    # Flash off-peak input/output: $0.15/$0.60 per 1M tokens;
+    # cache-hit input: $0.006 peak / $0.003 off-peak.
+    DEEPSEEK_V4_FLASH = ModelSpec("deepseek-v4-flash", Provider.DEEPSEEK, 0.30, 1.20, family="deepseek", weights="deepseek-v4-flash")
+    # V4-Pro-0813 off-peak input/output: $0.66/$1.98 per 1M tokens.
+    DEEPSEEK_V4_PRO   = ModelSpec("deepseek-v4-pro",   Provider.DEEPSEEK, 1.32, 3.96, family="deepseek", weights="deepseek-v4-pro")
 
     # ──────── Z.AI / GLM (direct mainland, OpenAI-compatible) — judge/eval only, no personal data ────────
     GLM_5_2        = ModelSpec("glm-5.2",        Provider.ZAI, 1.40, 4.40, family="glm", weights="glm-5.2")   # current flagship (added 2026-07-12)
@@ -347,8 +370,12 @@ class LLMModel(Enum):
     # `LLMModel.<NATIVE>.us_route()` returns the row here — see route_twins().
     # Prices re-verified against openrouter.ai model pages 2026-07-30.
     # Rows marked PROMO are launch discounts that WILL expire — re-verify.
-    OR_DEEPSEEK_V4_FLASH = ModelSpec("deepseek/deepseek-v4-flash", Provider.OPENROUTER, 0.09,  0.18, family="deepseek", weights="deepseek-v4-flash")
-    OR_DEEPSEEK_V4_PRO   = ModelSpec("deepseek/deepseek-v4-pro",   Provider.OPENROUTER, 0.435, 0.87, family="deepseek", weights="deepseek-v4-pro")
+    # DeepSeek prices as OpenRouter's /api/v1/models listing shows them, read
+    # 2026-10-04. These remain V4-0423 models; actual prices depend on the host.
+    # https://openrouter.ai/deepseek/deepseek-v4-flash
+    OR_DEEPSEEK_V4_FLASH = ModelSpec("deepseek/deepseek-v4-flash", Provider.OPENROUTER, 0.0224, 1.28, family="deepseek", weights="deepseek-v4-flash")
+    # https://openrouter.ai/deepseek/deepseek-v4-pro
+    OR_DEEPSEEK_V4_PRO   = ModelSpec("deepseek/deepseek-v4-pro",   Provider.OPENROUTER, 0.2088, 0.4176, family="deepseek", weights="deepseek-v4-pro")
     OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 0.36,  0.75, family="glm", weights="glm-5.2")      # PROMO (-70%)
     OR_GLM_5             = ModelSpec("z-ai/glm-5",                 Provider.OPENROUTER, 0.60,  1.92, family="glm", weights="glm-5")
     OR_GLM_5_TURBO       = ModelSpec("z-ai/glm-5-turbo",           Provider.OPENROUTER, 1.20,  4.00, family="glm", weights="glm-5-turbo")
