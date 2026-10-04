@@ -3,7 +3,7 @@
 *RENDERED from `contract.yaml` by `project_manager contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
 - **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
-- **last tag:** v9.0.0 · **pyproject version:** 9.0.0
+- **last tag:** v9.0.0 · **pyproject version:** 9.1.0
 - **consume it as:** a pinned git dependency by tag in your `pyproject.toml` (charter §3.7); bump only after reading the changelog section for every tag you skip.
 
 ## Public seams

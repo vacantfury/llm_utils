@@ -3,6 +3,24 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v9.1.0 — 2026-10-04 (MINOR: new models)
+
+**Added:** the GPT-6 family on the OpenAI provider: `GPT_6_LUNA` (`gpt-6-luna`,
+$0.10/$0.50), `GPT_6_SOL` (`gpt-6-sol`, $2/$10), `GPT_6_1_SOL` (`gpt-6.1-sol`,
+$2/$10), `GPT_6_ASTRA` (`gpt-6-astra`, $10/$50), all per million tokens with the
+GPT-5 reasoning quirks; cached-input and long-context rates (above 272K input
+tokens the whole request bills higher) are documented in comments only.
+GPT-6 Luna is the estate's model for small tasks that would otherwise pay per
+call (global law cost-discipline, owner order 2026-10-04).
+
+**Changed (prices):** `DEEPSEEK_V4_FLASH` $0.30/$1.20 (DeepSeek retired V4-Flash;
+the id is served by V4.1-Flash; peak price, off-peak $0.15/$0.60),
+`DEEPSEEK_V4_PRO` $1.32/$3.96 (peak; off-peak $0.66/$1.98),
+`OR_DEEPSEEK_V4_FLASH` $0.0224/$1.28 and `OR_DEEPSEEK_V4_PRO` $0.2088/$0.4176
+(OpenRouter's models listing, 2026-10-04). Recorded DeepSeek costs before this
+release were understated. DeepSeek is retired as a worker and kept for research
+where the model is under study.
+
 ## v9.0.0 — 2026-09-27 (MAJOR: breaking default)
 
 **Changed (breaking):** paid API calls are capped per process. Every paid entry
