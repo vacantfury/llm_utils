@@ -1,0 +1,13 @@
+name: keyless tests
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-groups
+      - run: uv run pytest -q
