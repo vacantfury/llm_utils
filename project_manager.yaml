@@ -1,5 +1,5 @@
 schema: 1 # derived: The declaration.load schema implemented by this package.
-builder: v0.1.0 # derived: The first admitted release; this rollout follows the v0.1.0 milestone.
+builder: v0.4.1 # reviewed: moved by project_manager upgrade (project_manager t53 rollout, 2026-10-06).
 project: llm_utils # derived: the estate registry path for this project matches the checkout (including linked worktrees); registry key name withheld because this repo is public
 capabilities: # inferred: checkout and registry evidence
   - library # reviewed: consumer repos pin this package by tag in their Python dependencies (design section 4); consumer names withheld because this repo is public
@@ -21,6 +21,7 @@ validation: # inferred: evidence-supported checks only; adequacy needs review. E
 hygiene: # reviewed: no Ruff usage evidence (pyproject, ruff.toml, workflows, pre-commit); explicit off, since T1 and above declare hygiene (design section 4); ruff enters at design section 12 step 10
   lint: {tool: ruff, mode: off}
 ci: # derived: Literal main push/tag filters and schedules in existing GitHub workflows; no workflow is executed. Weekly test clock membership in the estate registry
+  transport: embedded # reviewed: public repository, so the full workflow is embedded in-repo (policy ci.yaml transport_visibility public: embedded); it replaces the hand-written keyless tests.yml (project_manager t53 rollout 2026-10-06)
   triggers:
     - main # derived: .github/workflows/tests.yml on.push.branches
     - tags # derived: .github/workflows/tests.yml on.push.tags
