@@ -3,7 +3,7 @@
 *RENDERED from `contract.yaml` by `project_manager contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
 - **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
-- **last tag:** v9.0.0 · **pyproject version:** 9.1.0
+- **last tag:** v9.1.0 · **pyproject version:** 9.2.0
 - **consume it as:** a pinned git dependency by tag in your `pyproject.toml` (charter §3.7); bump only after reading the changelog section for every tag you skip.
 
 ## Public seams
@@ -80,17 +80,17 @@ The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_poi
 | `llm_utils.constants.MAX_SLURM_TIME_LIMIT` | v6.0.0 | v6.0.0 | `the device layer's per-cluster wall limits (partition facts)` |
 
 ## Consumers (derived from their pyprojects — never hand-listed)
-- agent_manager @ v8.1.0
-- auto_research @ v7.3.0
+- agent_manager @ v9.1.0
+- auto_research @ v8.2.0
 - autoflow @ v8.2.0
 - courier @ v8.2.0
 - llm_agent_security @ v5.0.0
 - llm_guardrail_security @ v8.2.0
 - llm_guardrail_security_public @ v5.4.0
 - model_internals_safety @ v5.0.0
-- personal_passive_asset @ v8.1.0
-- personal_trade @ v8.1.0
-- prospector @ v8.1.0
+- personal_passive_asset @ v8.2.0
+- personal_trade @ v9.1.0
+- prospector @ v9.1.0
 - psyche @ v8.1.0
 
 ## Changelog head (`[Unreleased]`)

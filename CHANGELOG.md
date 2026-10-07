@@ -5,6 +5,8 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v9.2.0 — 2026-10-07 (MINOR: call-ledger attribution during an outage)
+
 ### Fixed
 
 - **Call-ledger attribution during an oikos-map outage (t21):** when
