@@ -3,6 +3,22 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+### Fixed
+
+- **Call-ledger attribution during an oikos-map outage (t21):** when
+  agent_manager's `census.resolve` refuses the lookup (`OikosUnavailable`, an
+  `AgentManagerError`, since agent_manager 1.27.0), the call row is still
+  written but its `error_class` carries `attribution_unavailable:<error class>`
+  (after the call's own class on a failed call), instead of reading as a lookup
+  that found no repo. Only successful resolutions are reused, each for
+  `call_ledger.attribution_ttl_s` seconds (new config key, default 600), so a
+  refusal is never kept and a newly published map reaches long-running
+  processes. One lookup now serves both the launch point and the repo.
+  `census_id.cache_clear` / `repo_of.cache_clear` still work; `clear_cache()`
+  is the new name.
+
 ## v9.1.0 — 2026-10-04 (MINOR: new models)
 
 **Added:** the GPT-6 family on the OpenAI provider: `GPT_6_LUNA` (`gpt-6-luna`,

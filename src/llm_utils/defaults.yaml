@@ -35,3 +35,18 @@ spend_cap:
   # Tuning path: the call ledger's p95 output tokens per request by model
   # (rows carry output_tokens), recomputed as usage accumulates.
   assumed_output_tokens: 1024
+
+call_ledger:
+  # Seconds a successful census attribution (agent_manager census.resolve:
+  # the calling file's repo and launch point) is reused before it is looked up
+  # again, so a newly published oikos map or census row reaches a long-running
+  # process; 0 = look up on every call. A refused or failed lookup is never
+  # reused. The map's publication revision is not exposed by resolve, and the
+  # census file changes apart from it, so the bound is time. Basis for 600:
+  # one lookup costs about 0.4 s (agent_manager config load, measured
+  # 2026-10-07), so one per calling file per 10 minutes stays under 0.1% of a
+  # long process's time, while the map is republished about once a day (five
+  # revisions 2026-10-01..05). Tuning path: lower it if a new repo or census
+  # row must show in long-running processes sooner; raise it if the lookup
+  # cost shows in per-call latency.
+  attribution_ttl_s: 600.0

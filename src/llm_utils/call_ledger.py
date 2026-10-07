@@ -18,14 +18,25 @@ Launch point (the ledger's name for "which code made this call"), in order:
 3. the calling module's dotted name;
 4. ``DEFAULT_LAUNCH_POINT`` when no caller frame is found (e.g. a worker thread).
 
+The census lookup (``census.resolve``) also gives the row's ``repo``. When
+agent_manager refuses it because its control data is unavailable (the
+published oikos map, ``OikosUnavailable``), the row is still written, with
+``repo`` null, the module-name launch point, and ``ATTRIBUTION_UNAVAILABLE``
+noted in ``error_class``, so it never reads as a lookup that found nothing.
+Only successful lookups are reused, each for ``call_ledger.attribution_ttl_s``
+seconds (package config).
+
 Recording never raises into the caller.
 """
 from __future__ import annotations
 
-import functools
 import os
 import sys
+import threading
+import time
 from typing import Any, Optional
+
+from . import config
 
 # Ledger vocabulary (agent_manager config): surface of every call made
 # through this package, and the host literal for direct API callers.
@@ -39,6 +50,15 @@ STATUS_ERROR = "error"
 STATUS_TIMEOUT = "timeout"
 # The census row of this package itself: the fallback when no caller is found.
 DEFAULT_LAUNCH_POINT = "llm_utils.library"
+# Note written into a row's error_class when agent_manager refused the census
+# lookup (``attribution_unavailable:<error class>``), after the call's own
+# error class on a failed call. The ledger has no attribution-status field and
+# rejects unknown fields; agent_manager's own writers note an ok row's
+# degraded record the same way (``transcript_unreadable:<error>``), and its
+# audit counts error classes only on failed rows.
+ATTRIBUTION_UNAVAILABLE = "attribution_unavailable"
+# Distinct caller files whose resolution is kept (the former lru_cache size).
+_CACHE_SIZE = 512
 
 # Frames skipped when walking out to the caller: this package (and any
 # consumer wrapper whose module path carries an ``llm_utils`` component), plus
@@ -97,43 +117,101 @@ def caller() -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-@functools.lru_cache(maxsize=512)
+_cache: dict = {}  # path -> (monotonic expiry, census.resolve result)
+_cache_lock = threading.Lock()
+
+
+def clear_cache() -> None:
+    """Forget every reused census resolution."""
+    with _cache_lock:
+        _cache.clear()
+
+
 def census_id(path: Optional[str]) -> Optional[str]:
     """The census row id covering ``path``: the row naming that exact file,
     else the single directory row containing it; None when unresolved."""
-    return _census_resolve(path).get("launch_point")
+    return _lookup(path)[0].get("launch_point")
 
 
-def _census_resolve(path: Optional[str]) -> dict:
-    """agent_manager's public ``census.resolve`` seam; empty when unavailable."""
-    try:
-        from agent_manager import census  # type: ignore[import-not-found]
-
-        return census.resolve(path) or {}
-    except Exception:  # noqa: BLE001 — resolution is best effort
-        return {}
-
-
-@functools.lru_cache(maxsize=512)
 def repo_of(path: Optional[str]) -> Optional[str]:
     """The oikos repo containing ``path`` per agent_manager, else None."""
-    return _census_resolve(path).get("repo")
+    return _lookup(path)[0].get("repo")
+
+
+# Kept from the lru_cache era: callers and tests reset through either name.
+census_id.cache_clear = clear_cache  # type: ignore[attr-defined]
+repo_of.cache_clear = clear_cache  # type: ignore[attr-defined]
+
+
+def _refusals() -> tuple:
+    """The errors with which ``census.resolve`` refuses unavailable control
+    data: ``AgentManagerError`` (its documented seam contract; the published
+    map raises ``OikosUnavailable`` since agent_manager 1.27.0) and datastore's
+    ``LiveHomeUnderTest``, which resolve re-raises beside it."""
+    found = []
+    try:
+        from agent_manager.config import AgentManagerError  # type: ignore[import-not-found]
+        found.append(AgentManagerError)
+    except Exception:  # noqa: BLE001 — optional dependency
+        pass
+    try:
+        from datastore.home import LiveHomeUnderTest  # type: ignore[import-not-found]
+        found.append(LiveHomeUnderTest)
+    except Exception:  # noqa: BLE001 — optional dependency
+        pass
+    return tuple(found)
+
+
+def _lookup(path: Optional[str]) -> tuple[dict, Optional[str]]:
+    """(agent_manager's ``census.resolve`` result, refusal error class or None).
+
+    A refused lookup gives ({}, the error's class name); no census seam or any
+    other failure gives ({}, None), best effort as before. Only a successful
+    result is reused, until ``call_ledger.attribution_ttl_s`` passes."""
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(path)
+        if hit is not None and hit[0] > now:
+            return hit[1], None
+    try:
+        from agent_manager import census  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001 — no census seam: nothing to attribute
+        return {}, None
+    try:
+        found = census.resolve(path) or {}
+    except _refusals() as exc:
+        return {}, type(exc).__name__
+    except Exception:  # noqa: BLE001 — other resolution failures stay best effort
+        return {}, None
+    try:
+        ttl = float(config.get("call_ledger.attribution_ttl_s"))
+    except Exception:  # noqa: BLE001 — unreadable config: use the result, keep nothing
+        return found, None
+    if ttl > 0:
+        with _cache_lock:
+            _cache.pop(path, None)
+            while len(_cache) >= _CACHE_SIZE:
+                _cache.pop(next(iter(_cache)))  # oldest stored first
+            _cache[path] = (now + ttl, found)
+    return found, None
 
 
 def launch_point_for(service: Any) -> str:
     return _resolve(service)[0]
 
 
-def _resolve(service: Any) -> tuple[str, Optional[str]]:
-    """(launch point, repo or None) for a call made by ``service``."""
+def _resolve(service: Any) -> tuple[str, Optional[str], Optional[str]]:
+    """(launch point, repo or None, census refusal error class or None) for a
+    call made by ``service``."""
     explicit = getattr(service, "launch_point", None)
     module, path = caller()
-    repo = repo_of(path)
+    found, refused = _lookup(path)
+    repo = found.get("repo")
     if explicit:
-        return str(explicit), repo
+        return str(explicit), repo, refused
     if module is None:
-        return DEFAULT_LAUNCH_POINT, None
-    return census_id(path) or module, repo
+        return DEFAULT_LAUNCH_POINT, None, refused
+    return found.get("launch_point") or module, repo, refused
 
 
 def record_call(service: Any, input_tokens: int, output_tokens: int,
@@ -144,7 +222,9 @@ def record_call(service: Any, input_tokens: int, output_tokens: int,
     agent_manager is absent or recording failed. Never raises.
 
     A completed call is ``status="ok"``; a failed one passes ``status``
-    ("error" | "timeout") and ``error_class`` with zero tokens and cost."""
+    ("error" | "timeout") and ``error_class`` with zero tokens and cost. A
+    refused census lookup adds ``attribution_unavailable:<error class>`` to
+    ``error_class`` (after the call's own class, joined by "; ")."""
     try:
         ledger = _ledger()
         if ledger is None:
@@ -152,7 +232,10 @@ def record_call(service: Any, input_tokens: int, output_tokens: int,
         model = getattr(service, "model", None)
         model_id = getattr(model, "model_id", None) or (str(model) if model is not None else None)
         purpose = label if label is not None else getattr(service, "usage_label", None)
-        launch_point, repo = _resolve(service)
+        launch_point, repo, refused = _resolve(service)
+        if refused is not None:  # never read as a lookup that found nothing
+            note = f"{ATTRIBUTION_UNAVAILABLE}:{refused}"
+            error_class = note if error_class is None else f"{error_class}; {note}"
         fields = dict(
             launch_point=launch_point, surface=SURFACE, host=HOST,
             model=model_id, repo=repo, purpose=purpose,
