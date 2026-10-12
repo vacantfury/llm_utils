@@ -28,6 +28,11 @@ local = [
 bedrock = [
     "boto3>=1.34",
 ]
+# Fitting split-question combiners and the backend eval (llm_utils.judge);
+# applying a fitted combiner needs no extra.
+judge = [
+    "scikit-learn>=1.5",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -39,6 +44,9 @@ packages = ["src/llm_utils"]
 [dependency-groups]
 dev = [
     "pytest>=8",
+    # The judge combiner and eval tests need the `judge` extra's dependency;
+    # CI installs dependency groups, not extras.
+    "scikit-learn>=1.5",
 ]
 
 [tool.pytest.ini_options]

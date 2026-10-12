@@ -50,3 +50,49 @@ call_ledger:
   # row must show in long-running processes sooner; raise it if the lookup
   # cost shows in per-call latency.
   attribution_ttl_s: 600.0
+
+judge:
+  # Split-question judgments (llm_utils.judge): fitting a combiner and
+  # comparing backends. Per-judgment policy (each label's target_precision,
+  # the unknown ceiling max_unknown_rate) lives in the question set, not here.
+  #
+  # Folds of the out-of-fold probabilities that set each label's threshold
+  # (StratifiedKFold; lowered to the smallest label count when a label has
+  # fewer rows). Basis for 5: the scikit-learn convention. Tuning path: the
+  # eval report's band coverage and in-band accuracy; raise it when a set
+  # has few rows per label and the thresholds swing between splits.
+  cv_folds: 5
+  # Repeated stratified fit/test splits the backend eval scores over. Basis
+  # for 50: the 2026-10-11 Jev / Luna / Haiku comparison (400 rows). Tuning
+  # path: the report's paired win shares; raise it when they sit near 50%.
+  eval_splits: 50
+  # Share of the labeled rows each eval split fits on (the rest is scored).
+  # Basis for 0.5: the same 2026-10-11 comparison. Tuning path: lower it when
+  # test metrics vary too much between splits; raise it when the fit is short
+  # of rows per label.
+  fit_fraction: 0.5
+  # Bins of the expected calibration error (top-label confidence). Basis for
+  # 10: the same comparison. Tuning path: fewer bins when test parts are
+  # small (under about 100 rows per bin the estimate is noisy).
+  ece_bins: 10
+  # Inverse regularization strength of the logistic regression. Basis for
+  # 1.0: the scikit-learn default. Tuning path: when a set has more than about
+  # 1,000 rows, pick C by out-of-fold log loss across a small grid (0.1, 1, 10).
+  logistic_c: 1.0
+  # Solver iterations of the logistic regression. Basis for 1000: the
+  # 2026-10-11 prototype (the default 100 can stop before convergence on
+  # unscaled probability features). Tuning path: raise it if fitting warns
+  # that it did not converge.
+  logistic_max_iter: 1000
+  # Seed of every split and fold, so a report reproduces. Basis: the date of
+  # the first experiment. Tuning path: none; change it only to check that a
+  # result does not hang on one draw.
+  seed: 20261011
+  # Concurrent requests per backend kind while answering rows (a backend's
+  # `kind`; a backend without one counts as llm). Basis for 8 / 16: the
+  # 2026-10-11 comparison ran Jev at 8 and GPT-6 Luna at 16 without errors.
+  # Tuning path: the observed 429 rate in the eval's error rows; lower the
+  # kind's count when 429s appear, raise it when none do and latency allows.
+  workers:
+    jev: 8
+    llm: 16

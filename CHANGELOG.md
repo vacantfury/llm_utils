@@ -5,6 +5,29 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+### Added
+
+- **Jev through OpenRouter (t23):** `LLMModel.OR_JEV_1_13` (the dated id
+  `typesafe/jev-1.13-20260917`, $0.042 per million input tokens, output free)
+  is a second route of `TypeSafeService`, at OpenRouter's
+  `/api/alpha/decisions` with `OPENROUTER_API_KEY`. The row's provider picks
+  the route. `JEV_1_13_0` now carries `weights="jev-1.13"`, so the two rows are
+  route twins. Every `family="jev"` row is built as a `TypeSafeService`
+  whatever its provider (`LLMServiceFactory.service_class_for`), and route
+  availability does not report it usable in broker mode. On this route a
+  question without instructions raises `ValueError` before sending, an HTTP
+  400 raises `ValueError`, and the billed `usage.cost` is recorded as is.
+  Personal data is refused as on the direct route.
+- **Split-question judgments (`llm_utils.judge`, t23):** question sets in
+  YAML (every question has instructions, every choice question offers
+  `unknown`), backends for Jev and for any text model, one feature mapping, a
+  logistic-regression combiner with per-label thresholds fitted out of fold
+  and a pure-Python `decide` (`act` / `drop` / `escalate`), and
+  `eval_backends`, which answers labeled rows with a resumable cache and
+  compares backends on the same splits. New `judge` config block and
+  `llm_utils[judge]` extra (scikit-learn), needed for fitting and the eval
+  only.
+
 ### Fixed
 
 - **Second call on a new event loop (t22):** `OpenAIService` and its

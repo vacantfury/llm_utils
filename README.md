@@ -183,6 +183,55 @@ zero-retention switch: `evaluate(..., personal_data=True)` raises
 `zero_retention=True` under a written zero-retention agreement. Not available
 through the credential broker.
 
+The same model is served by OpenRouter as `LLMModel.OR_JEV_1_13` (the dated id
+`typesafe/jev-1.13-20260917`, `OPENROUTER_API_KEY`); the factory builds a
+`TypeSafeService` for it, and `JEV_1_13_0.route_twins()` names it. On that
+route every question must carry instructions (checked before sending), the
+billed cost OpenRouter reports is recorded as is, and personal data is refused
+the same way.
+
+### Split-question judgments
+
+`llm_utils.judge` asks one hard judgment as about ten small typed questions,
+each answerable from the text alone, and combines the answers with weights
+fitted on labeled rows. The questions live in one YAML file per judgment (see
+the `llm_utils.judge.questions` docstring for the shape); the backend is Jev
+(`JevBackend`) or any text model (`LLMBackend`), and `eval_backends` measures
+which one judges a given set best.
+
+```python
+from llm_utils import LLMModel, LLMServiceFactory
+from llm_utils.judge import (
+    Combiner, JevBackend, LLMBackend, eval_backends, fit_combiner, load_question_set, load_rows,
+)
+
+qset = load_question_set("refusal.yaml")
+rows = load_rows("refusal_labeled.jsonl")              # {"id", "state", "label"} per line
+jev = JevBackend.default()                             # OpenRouter Jev, OPENROUTER_API_KEY
+luna = LLMBackend.from_service(LLMServiceFactory.create(LLMModel.GPT_6_LUNA))
+report = eval_backends(qset, rows, [jev, luna], cache_dir="judge_cache")
+print(report.to_markdown())                            # accuracy, AUC, bands, unknowns, cost
+
+combiner = fit_combiner(qset, rows, jev.name, "judge_cache")
+combiner.save("refusal.combiner.yaml")
+decision = Combiner.load("refusal.combiner.yaml").decide(jev.evaluate(text, qset), qset)
+decision.band                                          # "act", "drop" or "escalate"
+```
+
+Unknowns stay visible: every choice question must offer the option
+`unknown`, the report gives each question's unknown rate, and a decision whose
+share of `unknown` answers exceeds the set's `max_unknown_rate` escalates, as
+does one below its label's out-of-fold threshold. A combiner refuses a question
+set whose content differs from the one it was fitted on. Personal data: both
+Jev routes refuse it (`evaluate(..., personal_data=True)` raises
+`RetentionPolicyError`); for an `LLMBackend` it is the caller's policy. A
+consumer that runs a model through its own runner passes
+`LLMBackend(complete=fn, name=...)`, where `fn(prompt)` returns the reply text
+(or text and cost). Fitting and the eval need scikit-learn:
+`pip install "llm_utils[judge]"`; applying a saved combiner does not. Settings
+(splits, folds, regularization, concurrency) are the `judge` block of the
+configuration.
+
 ### Local HuggingFace models
 
 Install the optional `local` dependencies to load models in the caller's process

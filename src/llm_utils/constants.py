@@ -66,6 +66,9 @@ OPENROUTER_API_URL: Final[str] = "https://openrouter.ai/api/v1"    # US aggregat
 XAI_API_URL: Final[str] = "https://api.x.ai/v1"                    # US jurisdiction
 MOONSHOT_API_URL: Final[str] = "https://api.moonshot.ai/v1"        # direct mainland (.ai = international)
 TYPESAFE_API_URL: Final[str] = "https://api.typesafe.ai"            # US; typed evaluation (Jev)
+# OpenRouter's alpha API: typed decisions (Jev) at {base}/decisions, outside
+# its OpenAI-compatible /api/v1 surface.
+OPENROUTER_ALPHA_API_URL: Final[str] = "https://openrouter.ai/api/alpha"   # US aggregator
 DEFAULT_SYSTEM_MESSAGE: Final[str] = "You are a helpful assistant."
 
 

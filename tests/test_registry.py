@@ -33,7 +33,7 @@ def test_metered_api_rows_are_priced():
             continue
         if m is LLMModel.GLM_4_7_FLASH:  # provider's free tier — genuine $0
             continue
-        if m is LLMModel.JEV_1_13_0:     # TypeSafe bills input only; output is free
+        if m.family == "jev":            # TypeSafe bills input only; output is free
             assert m.input_price > 0
             continue
         assert m.input_price > 0 and m.output_price > 0, (

@@ -19,11 +19,23 @@ Billing is per input token (output tokens are free); each call records usage
 through the same choke point as every other service, so the usage hook or the
 default call ledger gets its cost row.
 
-The caller pins the model id (``LLMModel.JEV_1_13_0``) so behavior does not
-move under an alias. Data handling: the direct API has no per-request
-zero-retention switch, so ``evaluate(..., personal_data=True)`` is refused
-unless the deployment built the service with ``zero_retention=True``, a
-statement that the account has a written zero-retention agreement.
+Two routes, chosen by the model row's provider:
+
+- ``Provider.TYPESAFE`` (``LLMModel.JEV_1_13_0``): the direct API above;
+- ``Provider.OPENROUTER`` (``LLMModel.OR_JEV_1_13``): ``POST
+  https://openrouter.ai/api/alpha/decisions`` with ``Authorization: Bearer
+  $OPENROUTER_API_KEY``, the same question wire format, except that every
+  question must carry ``instructions`` (checked before sending). The answer
+  carries the billed dollar cost (``usage.cost``), which is recorded as is;
+  a 400 validation answer raises ``ValueError``.
+
+The caller pins the model id (``LLMModel.JEV_1_13_0``, or the dated
+OpenRouter id) so behavior does not move under an alias. Data handling:
+neither route has a per-request zero-retention switch (OpenRouter's endpoint
+record for this model shows no retention policy), so ``evaluate(...,
+personal_data=True)`` is refused unless the deployment built the service with
+``zero_retention=True``, a statement that the account has a written
+zero-retention agreement.
 """
 from __future__ import annotations
 
@@ -37,12 +49,12 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Union
 import httpx2
 
 from ..base_llm_service import BaseLLMService, _backoff_seconds
-from ..constants import TYPESAFE_API_URL
+from ..constants import OPENROUTER_ALPHA_API_URL, TYPESAFE_API_URL
 from ..exceptions import (
     BrokerModeUnsupportedError, CreditsExhaustedError, FatalModelError,
     InvalidCredentialError, RetentionPolicyError,
 )
-from ..llm_model import LLMModel
+from ..llm_model import LLMModel, Provider
 from .._logging import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +68,22 @@ _MAX_RETRY_WAIT_S = 30.0     # a longer Retry-After is not waited out: the error
 _RETRY_TRANSPORT = (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)
 
 JSONContent = Union[str, Dict[str, Any], list]
+
+
+@dataclass(frozen=True)
+class _Route:
+    """One way to reach Jev: key variable, base URL, request path, log name."""
+    key_env: str
+    base_url: str
+    path: str
+    name: str
+
+
+_ROUTES = {
+    Provider.TYPESAFE: _Route("TYPESAFE_API_KEY", TYPESAFE_API_URL, "/v1/systemone", "TypeSafe"),
+    Provider.OPENROUTER: _Route("OPENROUTER_API_KEY", OPENROUTER_ALPHA_API_URL, "/decisions",
+                                "TypeSafe via OpenRouter"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +130,15 @@ def score_question(levels: Sequence[JSONContent],
     if instructions is not None:
         q["instructions"] = instructions
     return q
+
+
+def _check_instructions(questions: Mapping[str, dict]) -> None:
+    """The OpenRouter route answers HTTP 400 to a question without
+    ``instructions``; refuse it here, naming the question."""
+    for name, q in questions.items():
+        if q.get("instructions") in (None, ""):
+            raise ValueError(f"question {name!r}: the OpenRouter Jev route needs "
+                             f"instructions on every question")
 
 
 def _check_questions(questions: Mapping[str, dict]) -> None:
@@ -187,12 +224,18 @@ class TypeSafeHTTPError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 class TypeSafeService(BaseLLMService):
-    """Typed evaluation on TypeSafe's System One API (``evaluate``); it has no
-    chat interface, so ``batch_chat`` / ``chat`` raise ``NotImplementedError``."""
+    """Typed evaluation on TypeSafe's System One API (``evaluate``), directly
+    or through OpenRouter (the row's provider decides); it has no chat
+    interface, so ``batch_chat`` / ``chat`` raise ``NotImplementedError``."""
 
+    # Class-level facts describe the direct route; an instance carries its
+    # own route's key variable, URL and name.
     API_KEY_ENV = "TYPESAFE_API_KEY"
     BASE_URL = TYPESAFE_API_URL
     SERVICE_NAME = "TypeSafe"
+    # Neither route goes through the credential broker (route availability
+    # reads this so a brokered provider's Jev row is not reported usable).
+    BROKER_SUPPORTED = False
     # evaluate is a paid entry point: admitted against the run spend cap.
     _SPEND_GUARDED = BaseLLMService._SPEND_GUARDED + ("evaluate",)
 
@@ -202,13 +245,20 @@ class TypeSafeService(BaseLLMService):
         if os.getenv("LLM_UTILS_BROKER_URL") is not None:
             raise BrokerModeUnsupportedError(
                 "TypeSafe is not a broker route; unset LLM_UTILS_BROKER_URL for this process")
+        route = _ROUTES.get(model.provider)
+        if route is None:
+            raise ValueError(f"no Jev route for provider {model.provider.value!r} "
+                             f"(known: {', '.join(p.value for p in _ROUTES)})")
         self.model = model
+        self.route = route
+        self.API_KEY_ENV = route.key_env
+        self.SERVICE_NAME = route.name
         self.max_tokens = 0            # no text output; keeps the base estimator total
         self.api_key = kwargs.get("api_key") or os.getenv(self.API_KEY_ENV)
         if not self.api_key:
             raise ValueError(f"{self.SERVICE_NAME} API key not found. Set {self.API_KEY_ENV} "
                              "in the environment or pass the api_key parameter")
-        self.base_url = (kwargs.get("base_url") or self.BASE_URL).rstrip("/")
+        self.base_url = (kwargs.get("base_url") or route.base_url).rstrip("/")
         self.call_timeout: float = kwargs.get("call_timeout", 30.0)
         # Set only when the account has a written zero-retention agreement.
         self.zero_retention: bool = bool(kwargs.get("zero_retention", False))
@@ -245,14 +295,18 @@ class TypeSafeService(BaseLLMService):
         service was built with ``zero_retention=True``. Raises on failure after
         retries: ``InvalidCredentialError`` (401), ``CreditsExhaustedError``
         (402), ``FatalModelError`` (unknown model), ``ValueError`` (422
-        validation), else ``TypeSafeHTTPError`` / the transport exception.
+        validation; 400 on the OpenRouter route, and a question without
+        instructions there, before sending), else ``TypeSafeHTTPError`` / the
+        transport exception.
         """
         if personal_data and not self.zero_retention:
             raise RetentionPolicyError(
-                "personal data needs a zero-retention route: the direct TypeSafe API "
+                f"personal data needs a zero-retention route: {self.SERVICE_NAME} "
                 "has no per-request retention switch; build the service with "
                 "zero_retention=True only under a written zero-retention agreement")
         _check_questions(questions)
+        if self.model.provider is Provider.OPENROUTER:
+            _check_instructions(questions)
         body = {"state": state, "model": self.model.model_id, "questions": dict(questions)}
         started = time.monotonic()
         try:
@@ -264,7 +318,11 @@ class TypeSafeService(BaseLLMService):
         usage = payload.get("usage") or {}
         in_tok = int(usage.get("input_tokens") or 0)
         out_tok = int(usage.get("output_tokens") or 0)
-        cost = (in_tok * self.model.input_price + out_tok * self.model.output_price) / 1_000_000
+        billed = usage.get("cost")          # OpenRouter reports the billed dollars
+        if isinstance(billed, (int, float)) and not isinstance(billed, bool):
+            cost = float(billed)
+        else:
+            cost = (in_tok * self.model.input_price + out_tok * self.model.output_price) / 1_000_000
         self._record_usage(in_tok, out_tok, cost, is_test)
         answers = {name: _parse_answer(name, raw) for name, raw in payload["answers"].items()}
         return Evaluation(str(payload.get("model", self.model.model_id)), answers,
@@ -277,7 +335,7 @@ class TypeSafeService(BaseLLMService):
                                        personal_data=personal_data, is_test=is_test)
 
     def _post_with_retries(self, body: dict) -> dict:
-        url = f"{self.base_url}/v1/systemone"
+        url = f"{self.base_url}{self.route.path}"
         headers = {"Authorization": f"Bearer {self.api_key}",
                    "Content-Type": "application/json", "Accept": "application/json"}
         attempt = 0
@@ -305,7 +363,14 @@ class TypeSafeService(BaseLLMService):
                 time.sleep(wait)
                 attempt += 1
                 continue
-            raise _http_error(code, resp)
+            raise _http_error(code, resp, self.SERVICE_NAME,
+                              validation_codes=self._validation_codes())
+
+    def _validation_codes(self) -> tuple:
+        # OpenRouter answers a malformed question with 400 (a zod issue list).
+        if self.model.provider is Provider.OPENROUTER:
+            return (400, 422)
+        return (422,)
 
 
 def _retry_after_s(resp) -> Optional[float]:
@@ -319,18 +384,32 @@ def _retry_after_s(resp) -> Optional[float]:
     return None
 
 
-def _http_error(code: int, resp) -> Exception:
+def _error_message(resp) -> str:
+    """The error text of an answer: the direct API's ``detail``, or
+    OpenRouter's ``error.message``. Other fields of a JSON body (OpenRouter
+    adds a ``user_id``) never reach messages or logs."""
     try:
-        detail = resp.json().get("detail")
+        body = resp.json()
     except Exception:  # noqa: BLE001 — a non-JSON error body
-        detail = None
-    message = str(detail)[:300] if detail else (resp.text or "")[:200]
+        return (resp.text or "")[:200]
+    if isinstance(body, Mapping):
+        if body.get("detail"):
+            return str(body["detail"])[:300]
+        error = body.get("error")
+        if isinstance(error, Mapping) and error.get("message"):
+            return str(error["message"])[:300]
+    return "(no error message in the answer)"
+
+
+def _http_error(code: int, resp, service: str = "TypeSafe", *,
+                validation_codes: tuple = (422,)) -> Exception:
+    message = _error_message(resp)
     if code == 401:
-        return InvalidCredentialError(f"TypeSafe rejected the API key: {message}")
+        return InvalidCredentialError(f"{service} rejected the API key: {message}")
     if code == 402:
-        return CreditsExhaustedError(f"TypeSafe account cannot pay: {message}")
+        return CreditsExhaustedError(f"{service} account cannot pay: {message}")
     if code == 404:
-        return FatalModelError(f"TypeSafe model or endpoint not found: {message}")
-    if code == 422:
-        return ValueError(f"TypeSafe rejected the request: {message}")
+        return FatalModelError(f"{service} model or endpoint not found: {message}")
+    if code in validation_codes:
+        return ValueError(f"{service} rejected the request: {message}")
     return TypeSafeHTTPError(code, message)

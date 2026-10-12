@@ -144,6 +144,15 @@ def _key_env(provider: Provider) -> Optional[str]:
     return getattr(_service_class(provider), "API_KEY_ENV", None)
 
 
+def _brokered(model: LLMModel) -> bool:
+    """A broker can stand in for this row's credential: its provider is a
+    broker route and the service built for the row supports it (TypeSafe's
+    Jev rows do not, OpenRouter's included)."""
+    from .llm_service_factory import LLMServiceFactory
+    cls = LLMServiceFactory.service_class_for(model)
+    return model.provider in _BROKERED and getattr(cls, "BROKER_SUPPORTED", True)
+
+
 def _broker_mode() -> bool:
     return os.getenv(BROKER_URL_ENV) is not None
 
@@ -179,10 +188,10 @@ def _config_status(model: LLMModel) -> Tuple[bool, str]:
     p = model.provider
     if p is Provider.ANTHROPIC and not claude_api_allowed():
         return False, f"Anthropic API calls are off in this process ({CLAUDE_API_ALLOW_ENV} is not 1)"
-    if p in _BROKERED and _broker_mode():
+    if _brokered(model) and _broker_mode():
         return _broker_status()
     if _broker_mode() and _key_env(p) is not None:
-        return False, "broker mode, and this provider is not a broker route"
+        return False, "broker mode, and this route is not a broker route"
     if p is Provider.BEDROCK:
         return _bedrock_credentials()
     if p is Provider.LOCAL:
@@ -293,7 +302,7 @@ def route_status(model: ModelRef, *, probe: bool = False,
                 f"or use route_statuses({model!r})")
         model = LLMModel.from_string(model)
     ok, reason = _config_status(model)
-    if not ok or not probe or (model.provider in _BROKERED and _broker_mode()):
+    if not ok or not probe or (_brokered(model) and _broker_mode()):
         return RouteStatus(model, ok, reason)
     t = config.get("routes.probe_timeout_s") if timeout is None else timeout
     result = _probe(model, t)

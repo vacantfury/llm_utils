@@ -45,6 +45,13 @@ class LLMServiceFactory:
         Provider.SLURM_CLUSTER: SlurmClusterService,
         Provider.TYPESAFE: TypeSafeService,
     }
+
+    # Model families whose rows need their own service whatever host serves
+    # them. Checked before the provider: Jev on OpenRouter is a typed
+    # evaluation route (TypeSafeService), not OpenRouter's chat surface.
+    _FAMILY_REGISTRY: Dict[str, Type[BaseLLMService]] = {
+        "jev": TypeSafeService,
+    }
     
     # Cluster server manager (set by the consumer's orchestrator before
     # creating cluster-model services)
@@ -144,6 +151,16 @@ class LLMServiceFactory:
         cls._PROVIDER_REGISTRY[provider] = service_class
 
     @classmethod
+    def service_class_for(cls, model: LLMModel) -> Optional[Type[BaseLLMService]]:
+        """The service class ``create`` builds for this row: the family's
+        service when the family has one, else the provider's; None when
+        neither is registered."""
+        family_class = cls._FAMILY_REGISTRY.get(model.family or "")
+        if family_class is not None:
+            return family_class
+        return cls._PROVIDER_REGISTRY.get(model.provider)
+
+    @classmethod
     def _load_model_defaults(cls, model: LLMModel) -> dict:
         """Load per-model default params from the registered config loader."""
         if cls._config_loader is None:
@@ -191,7 +208,7 @@ class LLMServiceFactory:
         
         require_claude_api_allowed(model)   # paid Claude API is opt-in per process
 
-        service_class = cls._PROVIDER_REGISTRY.get(model.provider)
+        service_class = cls.service_class_for(model)
         
         if service_class is None:
             raise ValueError(

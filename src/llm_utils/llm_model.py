@@ -612,8 +612,18 @@ class LLMModel(Enum):
     # Not a chat model: TypeSafeService.evaluate(state, typed questions) ->
     # typed answers with probabilities. $0.042 per 1M input tokens, output
     # free (verified 2026-09-21). Pin the version id; `jev-latest` is an alias
-    # that moves.
-    JEV_1_13_0 = ModelSpec("jev-1.13.0", Provider.TYPESAFE, 0.042, 0.0, family="jev")
+    # that moves. The factory builds TypeSafeService for every `family="jev"`
+    # row whatever its provider.
+    JEV_1_13_0 = ModelSpec("jev-1.13.0", Provider.TYPESAFE, 0.042, 0.0, family="jev",
+                           weights="jev-1.13")
+    # The same model through OpenRouter's typed-decisions endpoint (probed
+    # 2026-10-11): the dated id pins behavior (the alias `typesafe/jev-1.13`
+    # resolves to it); OpenRouter lists a 64k context (a listing figure, so
+    # max_context_len stays unset) and bills $0.042 per 1M input tokens, output
+    # free. Its endpoint record shows no data-retention policy, so personal
+    # data is refused here as on the direct route.
+    OR_JEV_1_13 = ModelSpec("typesafe/jev-1.13-20260917", Provider.OPENROUTER, 0.042, 0.0,
+                            family="jev", weights="jev-1.13")
 
     # ──────── Guard model baselines (safety classifiers — inspect/judge, not
     # attack targets). `alignment_tier` deliberately left None
