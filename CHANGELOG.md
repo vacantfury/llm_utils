@@ -7,6 +7,16 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ### Fixed
 
+- **Second call on a new event loop (t22):** `OpenAIService` and its
+  OpenAI-compatible subclasses kept idle connections in the SDK's pool, but
+  each call runs in its own event loop, so a service's next call reused a
+  connection from the previous, closed loop. The read then failed (`Event loop
+  is closed`, raised as `APIConnectionError`); with the SDK's default retries
+  the call still succeeded by resending a request the provider had already
+  received, a likely paid duplicate. The direct route now keeps no idle
+  connections, as the broker route already did; timeouts, redirects and the
+  connection ceiling stay the SDK's defaults.
+
 - **Expired OpenRouter launch prices (t3):** `OR_GLM_5_2` moves from the
   launch discount $0.36/$0.75 to $1.40/$4.40 and `OR_MINIMAX_M3` from
   $0.24/$0.96 to $0.30/$1.20 per million tokens (the model makers' own

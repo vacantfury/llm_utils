@@ -45,6 +45,27 @@ _BATCH_TERMINAL_STATUSES = frozenset({"completed", "failed", "expired", "cancell
 _DEFAULT_CALL_TIMEOUT_S = 600.0
 
 
+def _no_keepalive_async_http_client():
+    """The SDK's default async HTTP client, keeping no idle connections.
+
+    Every entry point (``batch_chat``, ``chat_structured``, ``achat``) runs in
+    its own ``asyncio.run``, so one service sees a new event loop per call. A
+    kept-alive connection belongs to the loop that opened it: reused from the
+    next loop, the request is written and the read fails ("Event loop is
+    closed", surfacing as ``APIConnectionError``), and the SDK's retry resends
+    a request that was already sent (t22, 2026-10-09). The broker route keeps
+    no idle connections for the same reason (``broker.py``). Timeout,
+    redirects and the connection ceiling stay the SDK's own defaults.
+    """
+    import httpx as sdk_httpx
+    from openai import DefaultAsyncHttpxClient
+    from openai._constants import DEFAULT_CONNECTION_LIMITS
+
+    return DefaultAsyncHttpxClient(limits=sdk_httpx.Limits(
+        max_connections=DEFAULT_CONNECTION_LIMITS.max_connections,
+        max_keepalive_connections=0))
+
+
 class OpenAIService(BaseLLMService):
     """Service for OpenAI models (GPT-4o, GPT-5, etc.).
 
@@ -111,6 +132,8 @@ class OpenAIService(BaseLLMService):
         try:
             if self._broker_route is not None:
                 client_kwargs.update(self._broker_client_kwargs(asynchronous=True))
+            else:
+                client_kwargs["http_client"] = _no_keepalive_async_http_client()
             self.async_client = AsyncOpenAI(**client_kwargs)
             if self._broker_route is not None:
                 self.async_client.files = self.async_client.batches = UnsupportedAPI()
