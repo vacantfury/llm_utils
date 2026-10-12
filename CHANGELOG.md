@@ -5,6 +5,8 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v9.3.0 — 2026-10-12 (MINOR: split-question judgments, Jev through OpenRouter)
+
 ### Added
 
 - **Jev through OpenRouter (t23):** `LLMModel.OR_JEV_1_13` (the dated id

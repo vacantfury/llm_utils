@@ -17,12 +17,17 @@ seams:
       - tests/test_failed_calls.py
       - tests/test_spend_cap.py
       - tests/test_typesafe_service.py
+      - tests/test_judge.py
+      - tests/test_judge_eval.py
+      - tests/test_event_loops.py
       - tests/test_claude_api_policy.py
       - tests/test_testing_kit.py
     asserts: >-
       Consumers can resolve registered models and serving routes, construct services
       with caller configuration and usage labels, inspect route availability and
-      account balances, and receive typed evaluation answers.
+      account balances, and receive typed evaluation answers, directly or as
+      split-question judgments combined by fitted weights into act, drop or
+      escalate decisions, with an eval that compares backends on labeled rows.
       Calls preserve usage and failure recording, enforce spend limits and direct
       Claude API opt-in before sending, and support deterministic fake services
       with the documented exception hierarchy.
@@ -31,6 +36,7 @@ seams:
       - llm_utils.config
       - llm_utils.spend
       - llm_utils.testing
+      - llm_utils.judge
       - llm_utils.SpendStatus
       - llm_utils.spend_status
       - llm_utils.max_usd_per_run
@@ -88,7 +94,7 @@ seams:
       - llm_utils.BedrockService
     consumers: [psyche, agent_manager, autoflow, auto_research, courier, prospector, ties, personal_trade, personal_passive_asset]
     note: |
-      The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change. (v9.0.0+) Paid calls are admitted against a per-process spend cap before sending (SpendCapExceededError, an AccountFatalError); llm_utils.testing is the consumer test kit (explicit import).
+      The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change. (v9.0.0+) Paid calls are admitted against a per-process spend cap before sending (SpendCapExceededError, an AccountFatalError); llm_utils.testing is the consumer test kit (explicit import). (v9.3.0+) llm_utils.judge is the split-question judgment harness (explicit import; fitting and the eval need the judge extra).
 # Removed at v6.0.0 (the SLURM serving lifecycle moved to the device layer). Kept here so
 # consumers still pinned to v5.x see what the bump removes and where it went.
 deprecations:

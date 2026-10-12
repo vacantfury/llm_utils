@@ -3,18 +3,19 @@
 *RENDERED from `contract.yaml` by `project_manager contract` — never edit by hand (charter §3.7 provider half, Zeus-ratified 2026-09-03). Anything not declared below is private and may change without notice.*
 
 - **version policy:** `semver` — 1.0+: breaking = major, additive = minor, fix = patch
-- **last tag:** v9.1.0 · **pyproject version:** 9.2.0
+- **last tag:** v9.1.0 · **pyproject version:** 9.3.0
 - **consume it as:** a pinned git dependency by tag in your `pyproject.toml` (charter §3.7); bump only after reading the changelog section for every tag you skip.
 
 ## Public seams
 
 ### `python-api` — python-api
-The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change. (v9.0.0+) Paid calls are admitted against a per-process spend cap before sending (SpendCapExceededError, an AccountFatalError); llm_utils.testing is the consumer test kit (explicit import).
+The package's __all__. LLMServiceFactory.create(model, *, label=None, launch_point=None, ...) builds a service; BaseLLMService records usage through a consumer-installed usage hook, else (v7.1.0+) through the optional agent_manager call ledger (call_ledger.record_call). A failed call (v7.3.0+) records one zero-cost row with status error|timeout and error_class; a usage hook receives it only if it declares status and error_class (or **kwargs). LLMModel members are the model registry; removing a member is a MAJOR change. (v9.0.0+) Paid calls are admitted against a per-process spend cap before sending (SpendCapExceededError, an AccountFatalError); llm_utils.testing is the consumer test kit (explicit import). (v9.3.0+) llm_utils.judge is the split-question judgment harness (explicit import; fitting and the eval need the judge extra).
 - package `llm_utils` — public = the declared list below
   - `llm_utils.call_ledger`
   - `llm_utils.config`
   - `llm_utils.spend`
   - `llm_utils.testing`
+  - `llm_utils.judge`
   - `llm_utils.SpendStatus`
   - `llm_utils.spend_status`
   - `llm_utils.max_usd_per_run`
