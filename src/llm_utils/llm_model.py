@@ -369,14 +369,18 @@ class LLMModel(Enum):
     # `weights=` pairs each row with its DIRECT (mainland) twin above, so
     # `LLMModel.<NATIVE>.us_route()` returns the row here — see route_twins().
     # Prices re-verified against openrouter.ai model pages 2026-07-30.
-    # Rows marked PROMO are launch discounts that WILL expire — re-verify.
+    # A row marked PROMO is a launch discount that WILL expire: re-verify it.
     # DeepSeek prices as OpenRouter's /api/v1/models listing shows them, read
     # 2026-10-04. These remain V4-0423 models; actual prices depend on the host.
     # https://openrouter.ai/deepseek/deepseek-v4-flash
     OR_DEEPSEEK_V4_FLASH = ModelSpec("deepseek/deepseek-v4-flash", Provider.OPENROUTER, 0.0224, 1.28, family="deepseek", weights="deepseek-v4-flash")
     # https://openrouter.ai/deepseek/deepseek-v4-pro
     OR_DEEPSEEK_V4_PRO   = ModelSpec("deepseek/deepseek-v4-pro",   Provider.OPENROUTER, 0.2088, 0.4176, family="deepseek", weights="deepseek-v4-pro")
-    OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 0.36,  0.75, family="glm", weights="glm-5.2")      # PROMO (-70%)
+    # GLM-5.2 and MiniMax M3 launch discounts ended (re-read 2026-10-12): the
+    # rows carry the model maker's own OpenRouter price, which most hosts also
+    # charge. The listing headline for GLM-5.2 ($0.06/$7.00) is one outlier
+    # host and would understate input-heavy jobs.
+    OR_GLM_5_2           = ModelSpec("z-ai/glm-5.2",               Provider.OPENROUTER, 1.40,  4.40, family="glm", weights="glm-5.2")
     OR_GLM_5             = ModelSpec("z-ai/glm-5",                 Provider.OPENROUTER, 0.60,  1.92, family="glm", weights="glm-5")
     OR_GLM_5_TURBO       = ModelSpec("z-ai/glm-5-turbo",           Provider.OPENROUTER, 1.20,  4.00, family="glm", weights="glm-5-turbo")
     OR_GLM_5V_TURBO      = ModelSpec("z-ai/glm-5v-turbo",          Provider.OPENROUTER, 1.20,  4.00, family="glm", weights="glm-5v-turbo")  # vision
@@ -387,7 +391,7 @@ class LLMModel(Enum):
     OR_KIMI_K2_6         = ModelSpec("moonshotai/kimi-k2.6",       Provider.OPENROUTER, 0.60,  3.41, family="kimi", weights="kimi-k2.6")
     OR_KIMI_K2_7_CODE    = ModelSpec("moonshotai/kimi-k2.7-code",  Provider.OPENROUTER, 0.71,  3.50, family="kimi", weights="kimi-k2.7-code")
     OR_KIMI_K3           = ModelSpec("moonshotai/kimi-k3",         Provider.OPENROUTER, 2.90, 15.00, family="kimi", quirks=_NO_TEMP, weights="kimi-k3")
-    OR_MINIMAX_M3        = ModelSpec("minimax/minimax-m3",         Provider.OPENROUTER, 0.24,  0.96, family="minimax")  # PROMO (-60%)
+    OR_MINIMAX_M3        = ModelSpec("minimax/minimax-m3",         Provider.OPENROUTER, 0.30,  1.20, family="minimax")
     # Verified ABSENT from OpenRouter 2026-07-30 (so their direct rows above
     # have no US twin — us_route() correctly returns None): glm-4.7-flashx
     # (only glm-4.7-flash is listed) and kimi-k2.7-code-highspeed (a serving

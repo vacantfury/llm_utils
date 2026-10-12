@@ -5,6 +5,14 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Expired OpenRouter launch prices (t3):** `OR_GLM_5_2` moves from the
+  launch discount $0.36/$0.75 to $1.40/$4.40 and `OR_MINIMAX_M3` from
+  $0.24/$0.96 to $0.30/$1.20 per million tokens (the model makers' own
+  OpenRouter prices, which most hosts also charge; read 2026-10-12). Costs
+  recorded for these rows since the discounts ended were understated.
+
 ## v9.2.0 — 2026-10-07 (MINOR: call-ledger attribution during an outage)
 
 ### Fixed
