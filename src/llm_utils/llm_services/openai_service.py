@@ -58,8 +58,7 @@ def _no_keepalive_async_http_client():
     redirects and the connection ceiling stay the SDK's own defaults.
     """
     import httpx as sdk_httpx
-    from openai import DefaultAsyncHttpxClient
-    from openai._constants import DEFAULT_CONNECTION_LIMITS
+    from openai import DEFAULT_CONNECTION_LIMITS, DefaultAsyncHttpxClient
 
     return DefaultAsyncHttpxClient(limits=sdk_httpx.Limits(
         max_connections=DEFAULT_CONNECTION_LIMITS.max_connections,

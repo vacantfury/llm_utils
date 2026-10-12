@@ -27,7 +27,8 @@ _RESPONSE = (b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
 
 
 class _LoopBoundStream(httpcore.AsyncNetworkStream):
-    """One connection: answers one request, and fails when used from another loop."""
+    """One connection: answers one request. Used from another loop, the write
+    still goes out (the provider receives the request) and the read fails."""
 
     def __init__(self, backend):
         self.backend = backend
@@ -44,7 +45,6 @@ class _LoopBoundStream(httpcore.AsyncNetworkStream):
         return self.buffer.pop(0) if self.buffer else b""
 
     async def write(self, buffer, timeout=None):
-        self._check_loop()
         if buffer.startswith(b"POST "):
             self.backend.requests += 1
 
