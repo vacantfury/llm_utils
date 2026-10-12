@@ -161,7 +161,9 @@ def _distribution(name: str, value: Any, keys: Tuple[str, ...],
         raise ValueError(f"question {name!r}: expected an object of probabilities")
     raw: Dict[str, float] = {k: 0.0 for k in keys}
     for key, p in value.items():
-        k = aliases.get(str(key), str(key))
+        # The keys the prompt asks for win; an alias (a level's text) only
+        # maps a key that is not one, so digit-string levels never shift.
+        k = str(key) if str(key) in raw else aliases.get(str(key), str(key))
         if k in raw:
             raw[k] = _prob(name, p)
     total = sum(raw.values())
@@ -221,6 +223,9 @@ def _structured_schema(qset: QuestionSet):
     return create_model("JudgeAnswers", __config__=config, **fields)
 
 
+_TAP_LOCK = threading.Lock()
+
+
 class _UsageTap:
     """Per-thread tokens and cost a service records during one call.
 
@@ -228,6 +233,17 @@ class _UsageTap:
     ``_record_usage``; the tap wraps that method on this service instance
     (recording still happens as before) so concurrent rows each see their
     own cost. A call that recorded nothing reads as unknown cost."""
+
+    @classmethod
+    def for_service(cls, service: Any) -> "_UsageTap":
+        """The service's one tap: backends built on the same service share it,
+        so the wrapper never stacks."""
+        with _TAP_LOCK:
+            tap = service.__dict__.get("_judge_usage_tap")
+            if tap is None:
+                tap = cls(service)
+                service._judge_usage_tap = tap
+            return tap
 
     def __init__(self, service: Any):
         self._local = threading.local()
@@ -253,10 +269,16 @@ class _UsageTap:
         return acc[0], acc[1], (acc[2] if acc[3] else None)
 
 
+# Bump when render_prompt or the answer reading changes what a model is asked:
+# cached LLM answers are keyed by it, so old answers are asked again.
+PROMPT_VERSION = 1
+
+
 class LLMBackend:
     """Any text model answering a question set in one prompt per state."""
 
     kind = "llm"
+    cache_key = f"prompt-v{PROMPT_VERSION}"
 
     def __init__(self, complete: Optional[CompleteFn] = None, *, name: str,
                  model: Optional[str] = None, service: Any = None):
@@ -279,7 +301,7 @@ class LLMBackend:
             self._structured = (impl is not None and inspect.unwrap(impl)
                                 is not BaseLLMService.chat_structured)
             if hasattr(service, "_record_usage"):
-                self._tap = _UsageTap(service)
+                self._tap = _UsageTap.for_service(service)
 
     @classmethod
     def from_service(cls, service: Any, *, name: Optional[str] = None) -> "LLMBackend":

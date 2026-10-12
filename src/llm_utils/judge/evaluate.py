@@ -29,6 +29,7 @@ backend. Fitting and scoring need the ``judge`` extra (scikit-learn).
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import math
@@ -95,6 +96,21 @@ def cache_path(cache_dir: Union[str, Path], backend_name: str) -> Path:
     return Path(cache_dir) / f"{safe}.jsonl"
 
 
+def _cache_key(qset: QuestionSet, backend: Any) -> str:
+    """What a cached answer must match to be reused: the questions as asked
+    (``answers_hash``) plus the backend's own key (an LLM backend's prompt
+    version), so a changed question or prompt asks again."""
+    extra = getattr(backend, "cache_key", "")
+    return f"{qset.answers_hash}:{extra}" if extra else qset.answers_hash
+
+
+def _state_hash(state: Any) -> str:
+    """A row's text, hashed: new text under an old id asks again."""
+    text = state if isinstance(state, str) else json.dumps(state, sort_keys=True,
+                                                           ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def _record(rid: str, qset: QuestionSet, ev: Any) -> dict:
     answers = {}
     for name, a in ev.answers.items():
@@ -121,9 +137,10 @@ def _evaluation(rec: Mapping[str, Any]) -> JudgeEvaluation:
 
 
 def read_cache(cache_dir: Union[str, Path], backend_name: str,
-               qset: QuestionSet) -> Dict[str, dict]:
+               qset: QuestionSet, *, key: Optional[str] = None) -> Dict[str, dict]:
     """The latest record per row id for this question set's answers (other
-    sets' records and unreadable lines are ignored)."""
+    sets' records and unreadable lines are ignored). ``key`` (the answering
+    backend's cache key) narrows it to answers asked exactly that way."""
     path = cache_path(cache_dir, backend_name)
     out: Dict[str, dict] = {}
     if not path.exists():
@@ -134,9 +151,25 @@ def read_cache(cache_dir: Union[str, Path], backend_name: str,
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue                       # a line cut short by a crash
-            if isinstance(rec, dict) and rec.get("answers_hash") == qset.answers_hash:
+            if not isinstance(rec, dict):
+                continue
+            stored = str(rec.get("answers_hash"))
+            if (stored == key if key is not None else
+                    stored == qset.answers_hash or stored.startswith(qset.answers_hash + ":")):
                 out[str(rec.get("id"))] = rec
     return out
+
+
+def _end_partial_line(path: Path) -> None:
+    """A crash can leave the last line cut short; end it, so the next record
+    starts a line of its own instead of being lost with it."""
+    if path.exists() and path.stat().st_size:
+        with open(path, "rb") as fh:
+            fh.seek(-1, 2)
+            last = fh.read(1)
+        if last != b"\n":
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("\n")
 
 
 def _workers(backend: Any, override: Any, settings: Mapping[str, Any]) -> int:
@@ -150,7 +183,11 @@ def _workers(backend: Any, override: Any, settings: Mapping[str, Any]) -> int:
 
 def _answer_backend(qset: QuestionSet, rows: List[dict], backend: Backend,
                     cache_dir: Path, personal_data: bool, workers: int) -> Dict[str, Any]:
-    cached = read_cache(cache_dir, backend.name, qset)
+    key = _cache_key(qset, backend)
+    cached = read_cache(cache_dir, backend.name, qset, key=key)
+    # Only records of these rows, asked about their current text, count.
+    cached = {r["id"]: cached[r["id"]] for r in rows if r["id"] in cached
+              and cached[r["id"]].get("state_hash") == _state_hash(r["state"])}
     todo = [r for r in rows if cached.get(r["id"], {}).get("status") != "ok"]
     path = cache_path(cache_dir, backend.name)
     aborted: Optional[str] = None
@@ -160,18 +197,21 @@ def _answer_backend(qset: QuestionSet, rows: List[dict], backend: Backend,
         try:
             ev = backend.evaluate(row["state"], qset, personal_data=personal_data)
             features(ev, qset)                 # a missing or mistyped answer fails the row
-            return _record(row["id"], qset, ev)
+            return {**_record(row["id"], qset, ev), "answers_hash": key,
+                    "state_hash": _state_hash(row["state"])}
         except RetentionPolicyError as e:
             status, err = "refused", e
         except AccountFatalError:
             raise
         except Exception as e:  # noqa: BLE001 (one row's failure is recorded, then retried)
             status, err = "error", e
-        return {"id": row["id"], "status": status, "answers_hash": qset.answers_hash,
+        return {"id": row["id"], "status": status, "answers_hash": key,
+                "state_hash": _state_hash(row["state"]),
                 "error_class": type(err).__name__, "error": str(err)[:_ERROR_CHARS]}
 
     if todo:
         cache_dir.mkdir(parents=True, exist_ok=True)
+        _end_partial_line(path)
         with open(path, "a", encoding="utf-8") as fh, \
                 ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             futures = {pool.submit(one, r): r for r in todo}
@@ -378,7 +418,11 @@ def _backend_summary(qset: QuestionSet, b: str, data: Dict[str, Any], answer: Di
     labels = qset.label_names
     names = feature_names(qset)
     records = answer["records"]
-    status = Counter(rec.get("status") for rec in records.values())
+    status = Counter(records[r["id"]].get("status") for r in answer["rows"] if r["id"] in records)
+    # The labels of rows without an answer: a backend whose errors or refusals
+    # fall on one label is scored on a skewed test set (compare pairs instead).
+    unanswered = Counter(r["label"] for r in answer["rows"]
+                         if records.get(r["id"], {}).get("status") != "ok")
     scored = [s for s in splits if s is not None]
     metrics = None
     bands = None
@@ -423,12 +467,17 @@ def _backend_summary(qset: QuestionSet, b: str, data: Dict[str, Any], answer: Di
             flags.append(f"{qname} never varies across rows")
         questions[qname] = entry
 
+    if sum(unanswered.values()):
+        flags.append("unanswered rows by label " + ", ".join(
+            f"{l} {unanswered.get(l, 0)}" for l in labels)
+            + ": this backend is scored on the rows it answered; compare pairs")
     latency = data["latency"]
     return {
         "answered": status.get("ok", 0),
         "errors": status.get("error", 0),
         "refused": status.get("refused", 0),
         "missing": len(answer["rows"]) - sum(status.values()),
+        "unanswered_by_label": {l: unanswered.get(l, 0) for l in labels},
         "new_calls": answer["calls"],
         "aborted": answer["aborted"],
         "splits_scored": len(scored),
@@ -547,7 +596,8 @@ def fit_combiner(qset: QuestionSet, rows: Sequence[Mapping[str, Any]], backend_n
     evs, labels, models = [], [], Counter()
     for r in checked:
         rec = records.get(r["id"])
-        if rec and rec.get("status") == "ok":
+        if (rec and rec.get("status") == "ok"
+                and rec.get("state_hash") == _state_hash(r["state"])):
             evs.append(_evaluation(rec))
             labels.append(r["label"])
             models[rec.get("model")] += 1

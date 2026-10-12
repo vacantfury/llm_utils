@@ -225,3 +225,56 @@ def test_load_rows_and_fit_the_deployable_combiner(tmp_path):
     assert comb.basis["out_of_fold"]["auc"] > 0.85
     with pytest.raises(ValueError, match="no answered rows"):
         fit_combiner(QSET, rows, "never-ran", tmp_path / "cache")
+
+
+# -- review fixes (2026-10-12) ------------------------------------------------
+
+def test_new_text_under_an_old_id_is_asked_again(tmp_path):
+    jev = Informative("jev")
+    eval_backends(QSET, ROWS[:40], [jev], cache_dir=tmp_path, **FAST)
+    assert jev.calls == 40
+    changed = [dict(r, state=r["state"] + " (edited)") if i < 5 else r
+               for i, r in enumerate(ROWS[:40])]
+    eval_backends(QSET, changed, [jev], cache_dir=tmp_path, **FAST)
+    assert jev.calls == 45                       # only the five edited rows
+
+
+def test_counts_cover_only_the_rows_given(tmp_path):
+    jev = Informative("jev")
+    eval_backends(QSET, ROWS, [jev], cache_dir=tmp_path, **FAST)
+    report = eval_backends(QSET, ROWS[:40], [jev], cache_dir=tmp_path, **FAST)
+    b = report.backends["jev"]
+    assert (b["answered"], b["missing"], b["new_calls"]) == (40, 0, 0)
+
+
+def test_a_changed_backend_cache_key_asks_again(tmp_path):
+    jev = Informative("llm")
+    eval_backends(QSET, ROWS[:40], [jev], cache_dir=tmp_path, **FAST)
+    jev.cache_key = "prompt-v2"
+    eval_backends(QSET, ROWS[:40], [jev], cache_dir=tmp_path, **FAST)
+    assert jev.calls == 80
+    # fit_combiner reads the newest answers of this question set either way.
+    assert fit_combiner(QSET, ROWS[:40], "llm", tmp_path).basis["rows"] == 40
+
+
+def test_a_cut_short_last_line_does_not_swallow_the_next_record(tmp_path):
+    jev = Informative("jev", fail={ROWS[0]["state"]})
+    eval_backends(QSET, ROWS[:40], [jev], cache_dir=tmp_path, **FAST)
+    path = cache_path(tmp_path, "jev")
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write('{"id": "r0", "status": "ok", "answ')          # a crash mid-write
+    jev.fail = set()
+    eval_backends(QSET, ROWS[:40], [jev], cache_dir=tmp_path, **FAST)
+    calls = jev.calls
+    report = eval_backends(QSET, ROWS[:40], [jev], cache_dir=tmp_path, **FAST)
+    assert jev.calls == calls                    # the retried row's record was kept
+    assert report.backends["jev"]["answered"] == 40
+
+
+def test_unanswered_rows_are_counted_by_label_and_flagged(tmp_path):
+    harmful = [r["state"] for r in ROWS if r["label"] == "harmful"][:6]
+    jev = Informative("jev", fail=harmful)
+    report = eval_backends(QSET, ROWS, [jev], cache_dir=tmp_path, **FAST)
+    b = report.backends["jev"]
+    assert b["unanswered_by_label"] == {"harmful": 6, "harmless": 0}
+    assert any("unanswered rows by label" in f for f in b["flags"])

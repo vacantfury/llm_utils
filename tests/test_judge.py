@@ -417,3 +417,43 @@ class TestCombiner:
         d = comb.decide(ev(0.5, topic=(0.05, 0.9, 0.05)), q)
         assert d.label == "cooking" and set(d.probabilities) == {"weapons", "cooking", "other"}
         assert comb.basis["out_of_fold"]["auc"] > 0.9
+
+
+# -- review fixes (2026-10-12) ------------------------------------------------
+
+def test_digit_string_levels_keep_their_index():
+    from llm_utils.judge.backends import answers_from_reply
+    qset = load_question_set({
+        "name": "t", "version": 1, "state": "s", "max_unknown_rate": 0.5,
+        "labels": {"a": {"action": "act", "target_precision": 0.9},
+                   "b": {"action": "drop", "target_precision": 0.9}},
+        "questions": {"sev": {"type": "score", "instructions": "rate",
+                              "levels": ["1", "2", "3", "4", "5"]}}})
+    top = answers_from_reply({"sev": {"0": 0, "1": 0, "2": 0, "3": 0, "4": 1.0}}, qset)["sev"]
+    bottom = answers_from_reply({"sev": {"0": 1.0, "1": 0, "2": 0, "3": 0, "4": 0}}, qset)["sev"]
+    assert (top.score, bottom.score) == (4.0, 0.0)
+
+
+def test_backends_on_one_service_share_one_usage_tap():
+    from llm_utils.judge import LLMBackend
+
+    class Svc:
+        model = type("M", (), {"model_id": "fake"})()
+
+        def _record_usage(self, i, o, c, t):
+            pass
+
+        def chat(self, prompt):
+            self._record_usage(10, 5, 0.001, False)
+            return '{"x": 0.5}'
+
+    svc = Svc()
+    for _ in range(1500):
+        backend = LLMBackend.from_service(svc, name="fake")
+    qset = load_question_set({
+        "name": "t", "version": 1, "state": "s", "max_unknown_rate": 0.5,
+        "labels": {"a": {"action": "act", "target_precision": 0.9},
+                   "b": {"action": "drop", "target_precision": 0.9}},
+        "questions": {"x": {"type": "noul", "instructions": "yes?"}}})
+    ev = backend.evaluate("text", qset)
+    assert (ev.input_tokens, ev.output_tokens, ev.cost_usd) == (10, 5, 0.001)
