@@ -74,12 +74,11 @@ the SLURM serving lifecycle moved to the owner's device-management layer in v6.0
   consumer's own secret injection), never a committed test.
 - `text_docs/design.md` — founding record + reconciliation plan (three diverged copies
   are being merged; this repo seeded from the most-current trunk).
-- `TODO.md` — gitignored (task text is personal); registered in the owner's task system.
 - `text_docs/private/` — gitignored; site-specific cluster/account facts and consumer
   records live there, NEVER in committed files (owner order 2026-07-24).
 
 ## Task system
 
-Repo tasks live in root `TODO.md` (gitignored) per the global task standard; finished
+Tasks live in this repo's task store (truth: datastore `data/llm_utils/llm_utils.sqlite`); read them with `uv run --project ~/oikos/infrastructure/datastore python -m datastore task list` from the repo root; write only through the same command's store verbs (task-management standard). There is no TODO.md: the generated views were retired 2026-10-14 (psyche t920); the owner's view is the work board. Finished
 items move to the owner's central task archive. The repo is registered in the owner's
 hub task registry.
