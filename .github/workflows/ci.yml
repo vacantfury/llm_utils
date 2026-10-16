@@ -4,6 +4,7 @@ name: ci
   push:
     branches:
     - main
+    - pm-queue
     tags:
     - v*
   workflow_dispatch: {}
@@ -33,6 +34,7 @@ jobs:
     env:
       HELPER_PYTHON: '>=3.11'
       REPOSITORY_PRIVATE: ${{ toJSON(github.event.repository.private) }}
+      LAND_BRANCH: pm-queue
     steps:
     - name: Scheduled evidence guard
       id: guard
@@ -410,7 +412,31 @@ jobs:
         \ os.environ.get('REPOSITORY_PRIVATE') == 'true':\n            log.seek(0)\n\
         \            shutil.copyfileobj(log, sys.stdout.buffer)\n    if result.returncode:\n\
         \        raise SystemExit(result.returncode)\nraise SystemExit(0)\nPYTHON\n"
+    - name: Fetch the admitted base
+      if: ${{ steps.guard.outputs.validation == 'true' && github.event_name == 'push'
+        && github.ref == format('refs/heads/{0}', env.LAND_BRANCH) }}
+      working-directory: ${{ github.workspace }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: '# checkout does not retain auth; the per-command helper uses the job token
+        without storing it.
+
+        auth=(-c credential.helper= -c ''credential.helper=!gh auth git-credential'')
+
+        depth=()
+
+        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then depth=(--unshallow);
+        fi
+
+        # Freeze admission reads the explicit base and its release tag; an unreadable
+        fetch fails closed.
+
+        git "${auth[@]}" fetch --tags "${depth[@]}" origin ''+refs/heads/main:refs/remotes/origin/main''
+
+        '
     - name: Validation contract and declared hygiene
+      id: checks
       if: ${{ steps.guard.outputs.validation == 'true' && fromJSON(steps.plan.outputs.plan).run_checks
         }}
       env:
@@ -426,16 +452,64 @@ jobs:
         \ = true ]; then cat \"$log\"; elif [ \"$status\" -ne 0 ]; then echo \"::error::CI\
         \ checks failed (exit $status); raw diagnostics withheld\"; fi; rm -f \"$log\"\
         \ \"$CHECK_DOCUMENT\"; exit \"$status\"' EXIT\nuv run --no-project --python\
-        \ \"$HELPER_PYTHON\" python - >\"$log\" 2>&1 <<'PYTHON'\nimport os, pathlib,\
-        \ shlex, subprocess, tomllib\nenv = os.environ.copy()\nextra = env.pop('EXTRA_MARKERS')\n\
-        check_document = env.pop('CHECK_DOCUMENT')\nshard, index, total = env.pop('SHARD',\
-        \ ''), int(env.pop('SHARD_INDEX', '0')), int(env.pop('SHARD_TOTAL', '1'))\n\
-        if extra:\n    # Read the consumer's selection; an explicit release expression\
-        \ adds to it.\n    settings = tomllib.loads(pathlib.Path('pyproject.toml').read_text())\n\
+        \ \"$HELPER_PYTHON\" python - >\"$log\" 2>&1 <<'PYTHON'\nimport json, os,\
+        \ pathlib, shlex, subprocess, sys, tomllib\n\n\ndef redact(node):\n    \"\"\
+        \"A result without its failure summaries' first lines (they quote test output);\
+        \ ids and counts stay.\"\"\"\n    if isinstance(node, list):\n        return\
+        \ [redact(item) for item in node]\n    if isinstance(node, dict):\n      \
+        \  return {key: redact(value) for key, value in node.items()\n           \
+        \     if not (key == 'lines' and {'tests', 'total'} <= node.keys())}\n   \
+        \ return node\n\n\ndef land(builder, env, shard_args, check_document, index,\
+        \ total):\n    \"\"\"The merge queue's staging branch (t175, design section\
+        \ 5 Q6): the admitted base's requirements decide the\n    gate, as they do\
+        \ locally (check --stage ci would read the candidate's own declaration). The\
+        \ plan and this\n    job's result go to an artifact named for the commit and\
+        \ shard (policy ci.yaml land.artifact).\"\"\"\n    temp = pathlib.Path(env['RUNNER_TEMP'])\n\
+        \    # Landing records stay outside the checkout, as a data home does (land\
+        \ plan refuses one inside it).\n    env['PROJECT_MANAGER_DATA_HOME'] = str(temp\
+        \ / 'project-manager-land-home')\n    # The candidate snapshot's uv runs use\
+        \ the environment acquired while the deploy keys existed.\n    env['UV_PROJECT_ENVIRONMENT']\
+        \ = str(pathlib.Path('.venv').resolve())\n    planned = subprocess.run([builder,\
+        \ 'land', 'plan', '--repo', '.', '--base', 'origin/main',\n              \
+        \                '--candidate', 'HEAD', '--json'], env=env, capture_output=True,\
+        \ text=True)\n    sys.stderr.write(planned.stderr)\n    try:\n        issued\
+        \ = json.loads(planned.stdout)\n    except ValueError:\n        issued = {}\n\
+        \    if (planned.returncode or not isinstance(issued, dict) or not isinstance(issued.get('digest'),\
+        \ str)\n            or not isinstance(issued.get('plan'), dict)):\n      \
+        \  # Plan's own answer (status, reason, reason_code) is the step's result,\
+        \ so the log shows why; the\n        # fixed text only when plan printed nothing\
+        \ parseable (a pass without its plan included).\n        if isinstance(issued,\
+        \ dict) and issued.get('status') not in (None, 'pass'):\n            answer\
+        \ = {key: issued[key] for key in ('status', 'reason', 'reason_code') if key\
+        \ in issued}\n            if env.get('REPOSITORY_PRIVATE') != 'true':\n  \
+        \              answer = redact(answer)\n        else:\n            answer\
+        \ = {'status': 'unknown', 'reason': 'land plan refused or unreadable',\n \
+        \                     'reason_code': 'infrastructure'}\n        with open(check_document,\
+        \ 'w') as document:\n            json.dump(answer, document, sort_keys=True)\n\
+        \        return planned.returncode or 2\n    checked = subprocess.run([builder,\
+        \ 'land', 'check', '--repo', '.', '--plan', issued['digest'], '--json',\n\
+        \                              *shard_args], env=env, capture_output=True,\
+        \ text=True)\n    sys.stderr.write(checked.stderr)\n    try:\n        result\
+        \ = json.loads(checked.stdout)\n    except ValueError:\n        result = {'status':\
+        \ 'unknown', 'reason': 'land check printed no result'}\n    if env.get('REPOSITORY_PRIVATE')\
+        \ != 'true':\n        # Public logs and artifacts are disclosures: failing\
+        \ test ids stay, their failure lines do not.\n        result = redact(result)\n\
+        \    with open(check_document, 'w') as document:\n        json.dump(result,\
+        \ document, sort_keys=True)\n    folder = temp / 'project-manager-land-artifact'\n\
+        \    folder.mkdir(exist_ok=True)\n    (folder / 'plan.json').write_text(json.dumps(issued['plan'],\
+        \ sort_keys=True))\n    (folder / 'result.json').write_text(json.dumps(result,\
+        \ sort_keys=True))\n    name = 'land-{commit}-shard-{index}-of-{total}'.format(commit=env['GITHUB_SHA'],\
+        \ index=index, total=total)\n    with open(env['GITHUB_OUTPUT'], 'a') as output:\n\
+        \        output.write('land_artifact=' + name + '\\n')\n    return checked.returncode\n\
+        \n\nenv = os.environ.copy()\nextra = env.pop('EXTRA_MARKERS')\ncheck_document\
+        \ = env.pop('CHECK_DOCUMENT')\nshard, index, total = env.pop('SHARD', ''),\
+        \ int(env.pop('SHARD_INDEX', '0')), int(env.pop('SHARD_TOTAL', '1'))\nif extra:\n\
+        \    # Read the consumer's selection; an explicit release expression adds\
+        \ to it.\n    settings = tomllib.loads(pathlib.Path('pyproject.toml').read_text())\n\
         \    addopts = settings.get('tool', {}).get('pytest', {}).get('ini_options',\
         \ {}).get('addopts', '')\n    options = shlex.split(addopts) if isinstance(addopts,\
-        \ str) else addopts\n    expression = None\n    for index, option in enumerate(options):\n\
-        \        if option == '-m':\n            expression = options[index + 1]\n\
+        \ str) else addopts\n    expression = None\n    for position, option in enumerate(options):\n\
+        \        if option == '-m':\n            expression = options[position + 1]\n\
         \        elif option.startswith('-m'):\n            expression = option[2:]\n\
         \    # No selection means all tests already run; adding an expression must\
         \ not narrow it.\n    if expression:\n        selection = f'({expression})\
@@ -446,16 +520,27 @@ jobs:
         env['PATH'] = str(pathlib.Path('.venv/bin').resolve()) + os.pathsep + env['PATH']\n\
         # The red-run loop (t167, design section 5 rule 7): a failed declared check\
         \ runs once more; a second\n# pass reports flaky. The workflow is version-locked\
-        \ with the builder it installs, which accepts the flag.\nargv = [builder,\
-        \ 'check', '--stage', 'ci', '--rerun-failed-once']\nif total > 1:\n    # The\
-        \ job name carries matrix.shard and the selection job-index + 1; ci sync lists\
-        \ 1..N in order.\n    if shard != str(index + 1):\n        raise SystemExit('CI\
-        \ shard matrix must list 1..N in order; run ci sync')\n    argv += ['--shard',\
-        \ f'{index + 1}/{total}']\nif env.get('REPOSITORY_PRIVATE') == 'true':\n \
-        \   # Private logs already replay raw diagnostics; the bounded summary names\
-        \ the failing tests.\n    argv.append('--failure-summary')\nwith open(check_document,\
-        \ 'w') as document:\n    result = subprocess.run(argv, env=env, stdout=document)\n\
-        raise SystemExit(result.returncode)\nPYTHON\n"
+        \ with the builder it installs, which accepts the flag.\nshard_args = []\n\
+        if total > 1:\n    # The job name carries matrix.shard and the selection job-index\
+        \ + 1; ci sync lists 1..N in order.\n    if shard != str(index + 1):\n   \
+        \     raise SystemExit('CI shard matrix must list 1..N in order; run ci sync')\n\
+        \    shard_args = ['--shard', f'{index + 1}/{total}']\nland_branch = env.pop('LAND_BRANCH',\
+        \ '')\nif land_branch and env.get('GITHUB_EVENT_NAME') == 'push' and env.get('GITHUB_REF')\
+        \ == 'refs/heads/' + land_branch:\n    raise SystemExit(land(builder, env,\
+        \ shard_args, check_document, index + 1 if total > 1 else 1, total))\nargv\
+        \ = [builder, 'check', '--stage', 'ci', '--rerun-failed-once', *shard_args]\n\
+        if env.get('REPOSITORY_PRIVATE') == 'true':\n    # Private logs already replay\
+        \ raw diagnostics; the bounded summary names the failing tests.\n    argv.append('--failure-summary')\n\
+        with open(check_document, 'w') as document:\n    result = subprocess.run(argv,\
+        \ env=env, stdout=document)\nraise SystemExit(result.returncode)\nPYTHON\n"
+    - name: Upload landing evidence
+      if: ${{ !cancelled() && steps.checks.outputs.land_artifact != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: ${{ steps.checks.outputs.land_artifact }}
+        path: ${{ runner.temp }}/project-manager-land-artifact
+        if-no-files-found: error
+        retention-days: 7
     - name: Declared drift check
       if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.guard.outputs.drift
         == 'true' && strategy.job-index == 0 }}
@@ -510,5 +595,5 @@ jobs:
       shell: bash
       run: rm -f "$RUNNER_TEMP/project-manager-plan.json" "$RUNNER_TEMP/project-manager-summary.json"
         "$RUNNER_TEMP/project-manager-drift.json"
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-      }}
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pm-queue'
+      || startsWith(github.ref, 'refs/tags/v') }}
