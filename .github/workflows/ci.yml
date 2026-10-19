@@ -316,12 +316,15 @@ jobs:
         \                     f'ssh://git@github.com/{owner}/{dep}.git'])\n    else:\n\
         \        config.touch()\n    secrets.clear()\n    keys.clear()\n    run(['uv',\
         \ 'tool', 'install', '--force', '--from', target, 'project_manager'])\n  \
-        \  if pathlib.Path('uv.lock').exists():\n        # Plan before acquisition\
-        \ ends: later uv runs must find their extras/groups cached.\n        # Use\
-        \ the isolated installed builder, never a consumer executable from PATH.\n\
-        \        result = subprocess.run(['uv', 'tool', 'dir', '--bin'], env=env,\n\
-        \                                capture_output=True, text=True, check=False)\n\
-        \        if result.returncode:\n            raise SystemExit(result.returncode)\n\
+        \  # A tag push re-tests nothing (t222): it installs the builder for tag-verify\
+        \ and acquires none of the\n    # consumer's dependencies.\n    tag_push =\
+        \ os.environ['EVENT_NAME'] == 'push' and os.environ['REF_TYPE'] == 'tag'\n\
+        \    if pathlib.Path('uv.lock').exists() and not tag_push:\n        # Plan\
+        \ before acquisition ends: later uv runs must find their extras/groups cached.\n\
+        \        # Use the isolated installed builder, never a consumer executable\
+        \ from PATH.\n        result = subprocess.run(['uv', 'tool', 'dir', '--bin'],\
+        \ env=env,\n                                capture_output=True, text=True,\
+        \ check=False)\n        if result.returncode:\n            raise SystemExit(result.returncode)\n\
         \        tool_bin = pathlib.Path(result.stdout.strip())\n        if not tool_bin.is_absolute():\n\
         \            raise SystemExit('Isolated builder directory missing or malformed')\n\
         \        builder_cli = str(tool_bin / 'project_manager')\n        event =\
@@ -543,7 +546,8 @@ jobs:
         retention-days: 7
     - name: Declared drift check
       if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.guard.outputs.drift
-        == 'true' && strategy.job-index == 0 }}
+        == 'true' && !(github.event_name == 'push' && github.ref_type == 'tag') &&
+        strategy.job-index == 0 }}
       shell: bash
       run: "uv run --no-project --python \"$HELPER_PYTHON\" python - <<'PYTHON'\n\
         import json, os, pathlib, subprocess\ndrift = json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])\
