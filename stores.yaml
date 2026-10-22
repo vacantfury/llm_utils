@@ -1,0 +1,6 @@
+# The data-lifecycle declaration (project_manager standard data-lifecycle, schema 2). Explicit and empty:
+# no store is declared yet, so this repository's data reads unknown, which is kept and never removed.
+schema_version: 2
+repo: llm_utils
+stores: []
+producers: []
