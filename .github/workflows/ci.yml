@@ -4,9 +4,10 @@ name: ci
   push:
     branches:
     - main
-    - pm-queue
     tags:
     - v*
+  schedule:
+  - cron: 17 3 * * *
   workflow_dispatch: {}
 permissions:
   contents: read
@@ -34,7 +35,6 @@ jobs:
     env:
       HELPER_PYTHON: '>=3.11'
       REPOSITORY_PRIVATE: ${{ toJSON(github.event.repository.private) }}
-      LAND_BRANCH: pm-queue
     steps:
     - name: Scheduled evidence guard
       id: guard
@@ -147,13 +147,20 @@ jobs:
         \ 3.10 on Ubuntu 22.04.\n    stamp = datetime.fromisoformat(step['completed_at'].replace('Z',\
         \ '+00:00'))  # noqa: FURB162\n    if stamp.tzinfo is None or stamp > now:\n\
         \        raise ValueError('Evidence timestamp invalid')\n    return stamp\n\
-        \n\ndef scheduled_decision(rows, sha, branch, current_id, drift, settings,\
-        \ *, now=None):\n    \"\"\"Oldest matching pending run owns validation; executed\
-        \ validation on any trusted branch is reused while it is\n    younger than\
-        \ nightly_reuse_seconds, else validation runs again; drift has an independent\
-        \ due clock.\"\"\"\n    now = now or datetime.now().astimezone()\n    eligible\
-        \ = []\n    for row in rows:\n        order(row)\n        if row.get('event')\
-        \ not in settings['exception_events']:\n            continue\n        if row.get('head_branch')\
+        \n\ndef scoped_push(row, settings):\n    \"\"\"A new push may be partial;\
+        \ the stable validation name alone cannot prove full coverage.\"\"\"\n   \
+        \ return row.get('event') == 'push' and any(\n        step.get('name') ==\
+        \ settings.get('selection_step', 'Select covered tests')\n        for job\
+        \ in row.get('jobs', []) or [] if isinstance(job, dict)\n        for step\
+        \ in job.get('steps', []) if isinstance(step, dict))\n\n\ndef scheduled_decision(rows,\
+        \ sha, branch, current_id, drift, settings, *, now=None):\n    \"\"\"Oldest\
+        \ matching pending run owns validation; executed validation on any trusted\
+        \ branch is reused while it is\n    younger than nightly_reuse_seconds, else\
+        \ validation runs again; drift has an independent due clock.\"\"\"\n    now\
+        \ = now or datetime.now().astimezone()\n    eligible = []\n    for row in\
+        \ rows:\n        order(row)\n        if row.get('event') not in settings['exception_events']:\n\
+        \            continue\n        if scoped_push(row, settings) and row.get('conclusion')\
+        \ == settings['success']:\n            continue\n        if row.get('head_branch')\
         \ != branch and not trusted(row.get('head_branch'), settings):\n         \
         \   continue\n        if row['id'] == current_id:\n            continue\n\
         \        status = row.get('status')\n        if status not in settings['pending']\
@@ -218,25 +225,31 @@ jobs:
         : [\"workflow_dispatch\", \"schedule\", \"push\"], \"guard_step\": \"Scheduled\
         \ evidence guard\", \"linux_labels\": [\"ubuntu-latest\", \"ubuntu-26.04\"\
         , \"ubuntu-24.04\", \"ubuntu-22.04\", \"ubuntu-26.04-arm\", \"ubuntu-24.04-arm\"\
-        , \"ubuntu-22.04-arm\"], \"nightly_reuse_seconds\": {\"basis\": \"Owner order\
-        \ 2026-10-08 (t104): main gets one nightly run on GitHub. A nightly whose\
-        \ commit already has an executed Linux validation reuses it only while that\
-        \ validation is less than one day old (the nightly interval), so an unchanged\
-        \ main is validated again at least daily against moved dependencies and runner\
-        \ images (the drift check). A failed run on the commit stays red without a\
-        \ rerun.\", \"tuning\": \"Compare reused versus executed nightlies and red\
-        \ nightlies on unchanged commits; lengthen if reruns never find drift.\",\
-        \ \"value\": 86400}, \"page_size\": 100, \"pending\": [\"queued\", \"in_progress\"\
-        , \"waiting\", \"requested\", \"pending\"], \"release_exception_events\":\
-        \ [\"workflow_dispatch\"], \"revision_signal\": \"Unknown status, runner or\
-        \ incomplete page refuses and requires policy review; residual ceiling is\
-        \ zero.\", \"shard_job\": \"(shard {index} of {total})\", \"skipped\": \"\
+        , \"ubuntu-22.04-arm\", \"ubicloud\", \"ubicloud-standard-2\", \"ubicloud-standard-4\"\
+        , \"ubicloud-standard-8\", \"ubicloud-standard-16\", \"ubicloud-standard-30\"\
+        , \"ubicloud-standard-2-arm\", \"ubicloud-standard-4-arm\", \"ubicloud-standard-8-arm\"\
+        , \"ubicloud-standard-16-arm\", \"ubicloud-standard-30-arm\"], \"nightly_reuse_seconds\"\
+        : {\"basis\": \"Owner order 2026-10-08 (t104): main gets one nightly run on\
+        \ GitHub. A nightly whose commit already has an executed Linux validation\
+        \ reuses it only while that validation is less than one day old (the nightly\
+        \ interval), so an unchanged main is validated again at least daily against\
+        \ moved dependencies and runner images (the drift check). A failed run on\
+        \ the commit stays red without a rerun.\", \"tuning\": \"Compare reused versus\
+        \ executed nightlies and red nightlies on unchanged commits; lengthen if reruns\
+        \ never find drift.\", \"value\": 86400}, \"page_size\": 100, \"pending\"\
+        : [\"queued\", \"in_progress\", \"waiting\", \"requested\", \"pending\"],\
+        \ \"release_exception_events\": [\"workflow_dispatch\"], \"revision_signal\"\
+        : \"Unknown status, runner or incomplete page refuses and requires policy\
+        \ review; residual ceiling is zero.\", \"selection_step\": \"Select covered\
+        \ tests\", \"shard_job\": \"(shard {index} of {total})\", \"skipped\": \"\
         skipped\", \"success\": \"success\", \"trusted_branches\": [\"main\"], \"\
         validation_step\": \"Validation contract and declared hygiene\"}'))\nPYTHON\n"
     - if: ${{ steps.guard.outputs.acquire == 'true' }}
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
+        fetch-depth: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && '51' || '1' }}
     - if: ${{ steps.guard.outputs.acquire == 'true' }}
       uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
       with:
@@ -245,6 +258,7 @@ jobs:
     - name: Acquire dependencies
       if: ${{ steps.guard.outputs.acquire == 'true' }}
       env:
+        AUTOFLOW_DEPLOY_KEY: ${{ secrets.AUTOFLOW_DEPLOY_KEY }}
         DATASTORE_DEPLOY_KEY: ${{ secrets.DATASTORE_DEPLOY_KEY }}
         GRAPH_ENGINE_DEPLOY_KEY: ${{ secrets.GRAPH_ENGINE_DEPLOY_KEY }}
         PROJECT_MANAGER_DEPLOY_KEY: ${{ secrets.PROJECT_MANAGER_DEPLOY_KEY }}
@@ -253,32 +267,37 @@ jobs:
         BUILDER_OWNER: vacantfury
         EVENT_NAME: ${{ github.event_name }}
         REF_TYPE: ${{ github.ref_type }}
+        GH_TOKEN: ${{ github.token }}
       shell: bash
       run: "log=$(mktemp \"$RUNNER_TEMP/project-manager-log.XXXXXX\")\ntrap 'status=$?;\
         \ if [ \"${REPOSITORY_PRIVATE:-}\" = true ]; then cat \"$log\"; elif [ \"\
         $status\" -ne 0 ]; then echo \"::error::CI helper failed (exit $status); diagnostics\
-        \ withheld\"; fi; rm -f \"$log\"; exit \"$status\"' EXIT\nuv run --no-project\
-        \ --python \"$HELPER_PYTHON\" --with pyyaml==6.0.3 python - >\"$log\" 2>&1\
-        \ <<'PYTHON'\nimport json, os, pathlib, re, shlex, shutil, signal, subprocess,\
-        \ sys, tempfile, yaml\n# Pop secrets before launching any child, including\
-        \ dependency build backends. The reusable transport\n# passes INHERITED_SECRETS;\
+        \ withheld\"; fi; rm -f \"$log\"; exit \"$status\"' EXIT\n# The helper holds\
+        \ the secrets and the token, so it reads no uv configuration (--no-config):\
+        \ a consumer's\n# [tool.uv] index never serves its --with packages. The uv\
+        \ commands it starts read the consumer's as before.\nuv run --isolated --no-project\
+        \ --no-config --python \"$HELPER_PYTHON\" --with pyyaml==6.0.3 python - >\"\
+        $log\" 2>&1 <<'PYTHON'\nimport json, os, pathlib, re, shlex, shutil, signal,\
+        \ subprocess, sys, tempfile, yaml\n# Pop secrets before launching any child,\
+        \ including dependency build backends. The reusable transport\n# passes INHERITED_SECRETS;\
         \ the embedded rendering names each deploy key in this step's environment.\n\
         if 'INHERITED_SECRETS' in os.environ:\n    secrets = json.loads(os.environ.pop('INHERITED_SECRETS'))\n\
         else:\n    secrets = {name: os.environ.pop(name) for name in sorted(os.environ)\
-        \ if name.endswith('_DEPLOY_KEY')}\nowner = os.environ['DEPENDENCY_OWNER']\n\
-        builder_owner = os.environ['BUILDER_OWNER']\nif not all(re.fullmatch(r'[A-Za-z0-9-]+',\
-        \ value) for value in (owner, builder_owner)):\n    raise SystemExit('Invalid\
-        \ dependency repository owner')\nkeys = {name: value for name, value in secrets.items()\
-        \ if name.endswith('_DEPLOY_KEY')}\nfor name, value in keys.items():\n   \
-        \ if not re.fullmatch(r'[A-Z0-9_]+_DEPLOY_KEY', name):\n        raise SystemExit('Invalid\
-        \ deploy-key secret name')\n    if not isinstance(value, str) or not value.strip():\n\
-        \        raise SystemExit('Empty deploy-key secret; run project_manager keys\
-        \ plan')\nsource = os.environ['BUILDER_SOURCE']\nrequested_python = None\n\
-        if source == 'local':\n    # The consumer may be a fixture subdirectory; install\
-        \ the provider from the checkout.\n    target = os.environ.get('GITHUB_WORKSPACE',\
-        \ '.')\nelif source == 'tag':\n    declaration = yaml.safe_load(pathlib.Path('project_manager.yaml').read_text())\n\
-        \    builder = declaration.get('builder') if isinstance(declaration, dict)\
-        \ else None\n    if not isinstance(builder, str) or not re.fullmatch(r'v[0-9]+\\\
+        \ if name.endswith('_DEPLOY_KEY')}\ntoken = os.environ.pop('GH_TOKEN', '')\n\
+        owner = os.environ['DEPENDENCY_OWNER']\nbuilder_owner = os.environ['BUILDER_OWNER']\n\
+        if not all(re.fullmatch(r'[A-Za-z0-9-]+', value) for value in (owner, builder_owner)):\n\
+        \    raise SystemExit('Invalid dependency repository owner')\nkeys = {name:\
+        \ value for name, value in secrets.items() if name.endswith('_DEPLOY_KEY')}\n\
+        for name, value in keys.items():\n    if not re.fullmatch(r'[A-Z0-9_]+_DEPLOY_KEY',\
+        \ name):\n        raise SystemExit('Invalid deploy-key secret name')\n   \
+        \ if not isinstance(value, str) or not value.strip():\n        raise SystemExit('Empty\
+        \ deploy-key secret; run project_manager keys plan')\nsource = os.environ['BUILDER_SOURCE']\n\
+        requested_python = None\nif source == 'local':\n    # The consumer may be\
+        \ a fixture subdirectory; install the provider from the checkout.\n    target\
+        \ = os.environ.get('GITHUB_WORKSPACE', '.')\nelif source == 'tag':\n    declaration\
+        \ = yaml.safe_load(pathlib.Path('project_manager.yaml').read_text())\n   \
+        \ builder = declaration.get('builder') if isinstance(declaration, dict) else\
+        \ None\n    if not isinstance(builder, str) or not re.fullmatch(r'v[0-9]+\\\
         .[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?', builder):\n        raise SystemExit('Missing\
         \ or invalid builder tag')\n    target = f'git+ssh://git@github.com/{builder_owner}/project_manager.git@{builder}'\n\
         else:\n    raise SystemExit('builder-source must be tag or local')\ndef interrupted(number,\
@@ -319,41 +338,66 @@ jobs:
         \  # A tag push re-tests nothing (t222): it installs the builder for tag-verify\
         \ and acquires none of the\n    # consumer's dependencies.\n    tag_push =\
         \ os.environ['EVENT_NAME'] == 'push' and os.environ['REF_TYPE'] == 'tag'\n\
-        \    if pathlib.Path('uv.lock').exists() and not tag_push:\n        # Plan\
-        \ before acquisition ends: later uv runs must find their extras/groups cached.\n\
-        \        # Use the isolated installed builder, never a consumer executable\
-        \ from PATH.\n        result = subprocess.run(['uv', 'tool', 'dir', '--bin'],\
-        \ env=env,\n                                capture_output=True, text=True,\
-        \ check=False)\n        if result.returncode:\n            raise SystemExit(result.returncode)\n\
+        \    # Records mode (t220 step 1(c)): a branch push planned by the declared\
+        \ release makes the run's one\n    # records decision here, before any consumer\
+        \ dependency is installed, so the token is passed to that plan\n    # alone\
+        \ and to no process after the sync, and a records plan acquires the project\
+        \ environment only when\n    # a remaining check needs it.\n    before = None\n\
+        \    if (os.environ['EVENT_NAME'] == 'push' and os.environ['REF_TYPE'] ==\
+        \ 'branch' and source == 'tag'\n            and os.environ.get('GITHUB_EVENT_PATH')):\n\
+        \        pushed = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())\n\
+        \        before = pushed.get('before') if isinstance(pushed, dict) else None\n\
+        \        before = before if isinstance(before, str) and re.fullmatch(r'[0-9a-f]{40}',\
+        \ before) else None\n    lock = pathlib.Path('uv.lock').exists()\n    if (lock\
+        \ or before) and not tag_push:\n        # Plan before acquisition ends: later\
+        \ uv runs must find their extras/groups cached.\n        # Use the isolated\
+        \ installed builder, never a consumer executable from PATH.\n        result\
+        \ = subprocess.run(['uv', 'tool', 'dir', '--bin'], env=env,\n            \
+        \                    capture_output=True, text=True, check=False)\n      \
+        \  if result.returncode:\n            raise SystemExit(result.returncode)\n\
         \        tool_bin = pathlib.Path(result.stdout.strip())\n        if not tool_bin.is_absolute():\n\
         \            raise SystemExit('Isolated builder directory missing or malformed')\n\
         \        builder_cli = str(tool_bin / 'project_manager')\n        event =\
         \ os.environ['EVENT_NAME']\n        if event == 'push':\n            event\
         \ = 'tag' if os.environ['REF_TYPE'] == 'tag' else 'push'\n        elif event\
         \ == 'workflow_dispatch':\n            event = 'dispatch'\n        result\
-        \ = subprocess.run([builder_cli, 'ci', 'plan', '--event', event, '--json'],\n\
-        \                                env=env, capture_output=True, text=True,\
-        \ check=False)\n        if os.environ.get('REPOSITORY_PRIVATE') == 'true':\n\
-        \            sys.stderr.write(result.stderr)\n            if result.returncode:\n\
-        \                sys.stderr.write(result.stdout)\n        if result.returncode:\n\
-        \            raise SystemExit(result.returncode)\n        planned = json.loads(result.stdout)\n\
-        \        sync_args = planned.get('dependency_sync_args')\n        if (planned.get('status')\
-        \ != 'pass' or not isinstance(sync_args, list)\n                or not sync_args\
-        \ or not all(isinstance(arg, str) and arg for arg in sync_args)):\n      \
-        \      raise SystemExit('CI dependency acquisition plan missing or malformed;\
-        \ check the builder pin')\n        # CI's Python minor for a consumer that\
-        \ pins none (policy ci.yaml python): the same request the\n        # local\
-        \ merge check makes, exported below for every later consumer command.\n  \
-        \      requested_python = planned.get('python')\n        if requested_python\
-        \ is not None:\n            if not isinstance(requested_python, str) or not\
-        \ re.fullmatch(r'[0-9]+\\.[0-9]+', requested_python):\n                raise\
-        \ SystemExit('CI Python request malformed; check the builder pin')\n     \
-        \       env['UV_PYTHON'] = requested_python\n        run(['uv', 'sync', '--frozen',\
-        \ *sync_args])\n# Credentials are gone before publishing the tool path or\
-        \ running any consumer setup.\nresult = subprocess.run(['uv', 'tool', 'dir',\
-        \ '--bin'], capture_output=True, text=True, check=False)\nif os.environ.get('REPOSITORY_PRIVATE')\
-        \ == 'true':\n    sys.stderr.write(result.stderr)\nif result.returncode:\n\
-        \    raise SystemExit(result.returncode)\nwith open(os.environ['GITHUB_PATH'],\
+        \ = subprocess.run([builder_cli, 'ci', 'plan', '--event', event, '--json',\n\
+        \                                 *(['--base', before] if before else [])],\n\
+        \                                env={**env, 'GH_TOKEN': token} if before\
+        \ and token else env,\n                                capture_output=True,\
+        \ text=True, check=False)\n        if os.environ.get('REPOSITORY_PRIVATE')\
+        \ == 'true':\n            sys.stderr.write(result.stderr)\n            if\
+        \ result.returncode:\n                sys.stderr.write(result.stdout)\n  \
+        \      if result.returncode:\n            raise SystemExit(result.returncode)\n\
+        \        planned = json.loads(result.stdout)\n        sync_args = planned.get('dependency_sync_args')\n\
+        \        if (planned.get('status') != 'pass' or not isinstance(sync_args,\
+        \ list)\n                or not sync_args or not all(isinstance(arg, str)\
+        \ and arg for arg in sync_args)):\n            raise SystemExit('CI dependency\
+        \ acquisition plan missing or malformed; check the builder pin')\n       \
+        \ # CI's Python minor for a consumer that pins none (policy ci.yaml python):\
+        \ the same request the\n        # local merge check makes, exported below\
+        \ for every later consumer command.\n        requested_python = planned.get('python')\
+        \ if lock else None\n        if requested_python is not None:\n          \
+        \  if not isinstance(requested_python, str) or not re.fullmatch(r'[0-9]+\\\
+        .[0-9]+', requested_python):\n                raise SystemExit('CI Python\
+        \ request malformed; check the builder pin')\n            env['UV_PYTHON']\
+        \ = requested_python\n        if before:\n            # The run's one records\
+        \ decision, kept outside the checkout: Plan CI reads the plan back, and\n\
+        \            # the Records check step re-verifies against P's merged, validated\
+        \ proof, both without GitHub.\n            proof = planned.pop('records_proof',\
+        \ None)\n            for name, kept in (('project-manager-records-plan.json',\
+        \ planned),\n                               ('project-manager-records-base-proof.json',\
+        \ proof)):\n                if kept is not None:\n                    handle\
+        \ = os.open(os.path.join(os.environ['RUNNER_TEMP'], name),\n             \
+        \                        os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n  \
+        \                  with os.fdopen(handle, 'w') as stored:\n              \
+        \          json.dump(kept, stored)\n        if lock and (planned.get('mode')\
+        \ != 'records' or planned.get('records_sync') is True):\n            run(['uv',\
+        \ 'sync', '--frozen', *sync_args])\n# Credentials are gone before publishing\
+        \ the tool path or running any consumer setup.\nresult = subprocess.run(['uv',\
+        \ 'tool', 'dir', '--bin'], capture_output=True, text=True, check=False)\n\
+        if os.environ.get('REPOSITORY_PRIVATE') == 'true':\n    sys.stderr.write(result.stderr)\n\
+        if result.returncode:\n    raise SystemExit(result.returncode)\nwith open(os.environ['GITHUB_PATH'],\
         \ 'a') as path:\n    path.write(result.stdout.strip() + '\\n')\nif requested_python\
         \ is not None:\n    with open(os.environ['GITHUB_ENV'], 'a') as exported:\n\
         \        exported.write('UV_PYTHON=' + requested_python + '\\n')\nPYTHON\n"
@@ -370,17 +414,22 @@ jobs:
         ; fi; if [ \"${REPOSITORY_PRIVATE:-}\" = true ]; then cat \"$log\"; elif [\
         \ \"$status\" -ne 0 ]; then echo \"::error::CI helper failed (exit $status);\
         \ diagnostics withheld\"; fi; rm -f \"$log\"; exit \"$status\"' EXIT\nuv run\
-        \ --no-project --python \"$HELPER_PYTHON\" python - >\"$log\" 2>&1 <<'PYTHON'\n\
-        import json, os, pathlib, subprocess, sys\nroot = pathlib.Path(os.environ['RUNNER_TEMP'])\n\
+        \ --isolated --no-project --python \"$HELPER_PYTHON\" python - >\"$log\" 2>&1\
+        \ <<'PYTHON'\nimport json, os, pathlib, subprocess, sys\nroot = pathlib.Path(os.environ['RUNNER_TEMP'])\n\
         plan_path = root / 'project-manager-plan.json'\nsummary_path = root / 'project-manager-summary.json'\n\
         plan_path.unlink(missing_ok=True)\nsummary_path.unlink(missing_ok=True)\n\
         event = os.environ['EVENT_NAME']\nif event == 'push':\n    event = 'tag' if\
         \ os.environ['REF_TYPE'] == 'tag' else 'push'\nelif event == 'workflow_dispatch':\n\
         \    event = 'dispatch'\nif event not in {'push', 'tag', 'schedule', 'dispatch'}:\n\
-        \    raise SystemExit('Unsupported CI event')\nresult = subprocess.run(['project_manager',\
-        \ 'ci', 'plan', '--event', event, '--json'],\n                        capture_output=True,\
-        \ text=True)\nif os.environ.get('REPOSITORY_PRIVATE') == 'true':\n    sys.stderr.write(result.stderr)\n\
-        document = json.loads(result.stdout)\n# Execution arguments stay in a private\
+        \    raise SystemExit('Unsupported CI event')\nkept = root / 'project-manager-records-plan.json'\n\
+        if kept.exists():\n    # Acquisition made this run's one records decision\
+        \ (t220 step 1(c)); read it back, reading no GitHub.\n    document = json.loads(kept.read_text())\n\
+        \    kept.unlink()\n    returncode = 0 if document.get('exit_code') == 0 else\
+        \ 1\nelse:\n    result = subprocess.run(['project_manager', 'ci', 'plan',\
+        \ '--event', event, '--json'],\n                            capture_output=True,\
+        \ text=True)\n    if os.environ.get('REPOSITORY_PRIVATE') == 'true':\n   \
+        \     sys.stderr.write(result.stderr)\n    document = json.loads(result.stdout)\n\
+        \    returncode = result.returncode\n# Execution arguments stay in a private\
         \ runner file, never outputs, logs or displayed environment.\nfd = os.open(plan_path,\
         \ os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\nwith os.fdopen(fd, 'w') as\
         \ local:\n    json.dump(document, local)\nif document.get('drift'):\n    drift_path\
@@ -389,16 +438,16 @@ jobs:
         \    with os.fdopen(fd, 'w') as local:\n        json.dump(document['drift'],\
         \ local)\nsummary = {\n    'status': document.get('status') if document.get('status')\
         \ in {'pass', 'fail', 'unknown'} else 'unknown',\n    'run_checks': document.get('run_checks')\
-        \ is True and result.returncode == 0,\n    'tier': document.get('tier') if\
-        \ document.get('tier') in {'T0', 'T1', 'T2', 'T3'} else 'unknown',\n    'checks':\
-        \ len(document.get('checks', [])),\n    'errors': len(document.get('errors',\
-        \ [])),\n    'warnings': len(document.get('warnings', [])),\n}\npublic = json.dumps(summary,\
-        \ sort_keys=True)\nwith open(os.environ['GITHUB_OUTPUT'], 'a') as output:\n\
-        \    output.write('plan=' + public + '\\n')\nsummary_path.write_text(public\
-        \ + '\\n')\nraise SystemExit(result.returncode)\nPYTHON\n"
+        \ is True and returncode == 0,\n    'records': document.get('mode') == 'records'\
+        \ and returncode == 0,\n    'tier': document.get('tier') if document.get('tier')\
+        \ in {'T0', 'T1', 'T2', 'T3'} else 'unknown',\n    'checks': len(document.get('checks',\
+        \ [])),\n    'errors': len(document.get('errors', [])),\n    'warnings': len(document.get('warnings',\
+        \ [])),\n}\npublic = json.dumps(summary, sort_keys=True)\nwith open(os.environ['GITHUB_OUTPUT'],\
+        \ 'a') as output:\n    output.write('plan=' + public + '\\n')\nsummary_path.write_text(public\
+        \ + '\\n')\nraise SystemExit(returncode)\nPYTHON\n"
     - name: Declared CI setup
-      if: ${{ steps.guard.outputs.acquire == 'true' && fromJSON(steps.plan.outputs.plan).run_checks
-        }}
+      if: ${{ steps.guard.outputs.acquire == 'true' && (fromJSON(steps.plan.outputs.plan).run_checks
+        || fromJSON(steps.plan.outputs.plan).records) }}
       shell: bash
       run: "log=$(mktemp \"$RUNNER_TEMP/project-manager-log.XXXXXX\")\ntrap 'status=$?;\
         \ if [ \"${REPOSITORY_PRIVATE:-}\" = true ]; then cat \"$log\"; elif [ \"\
@@ -415,34 +464,47 @@ jobs:
         \ os.environ.get('REPOSITORY_PRIVATE') == 'true':\n            log.seek(0)\n\
         \            shutil.copyfileobj(log, sys.stdout.buffer)\n    if result.returncode:\n\
         \        raise SystemExit(result.returncode)\nraise SystemExit(0)\nPYTHON\n"
-    - name: Fetch the admitted base
-      if: ${{ steps.guard.outputs.validation == 'true' && github.event_name == 'push'
-        && github.ref == format('refs/heads/{0}', env.LAND_BRANCH) }}
-      working-directory: ${{ github.workspace }}
+    - name: Select covered tests
+      id: selection
+      if: ${{ steps.guard.outputs.validation == 'true' && fromJSON(steps.plan.outputs.plan).run_checks
+        }}
       env:
-        GH_TOKEN: ${{ github.token }}
+        TEST_REASONS: '{"reasons": [{"basis": "agent_manager:pyproject.toml dependency
+          on llm_utils; agent_manager:pyproject.toml dependency on llm_utils; auto_research:pyproject.toml
+          dependency on llm_utils; autoflow:pyproject.toml dependency on llm_utils;
+          courier:pyproject.toml dependency on llm_utils; llm_agent_security:pyproject.toml
+          dependency on llm_utils; llm_guardrail_security:pyproject.toml dependency
+          on llm_utils; model_internals_safety:pyproject.toml dependency on llm_utils;
+          personal_passive_asset:pyproject.toml dependency on llm_utils; personal_trade:pyproject.toml
+          dependency on llm_utils; prospector:pyproject.toml dependency on llm_utils;
+          psyche:pyproject.toml dependency on llm_utils", "paths": ["src/llm_utils"],
+          "reason": "crosses", "source": "derived"}, {"basis": "visibility public,
+          a declared release, no interface_of", "paths": ["src/llm_utils"], "reason":
+          "crosses", "source": "derived"}]}'
       shell: bash
-      run: '# checkout does not retain auth; the per-command helper uses the job token
-        without storing it.
-
-        auth=(-c credential.helper= -c ''credential.helper=!gh auth git-credential'')
-
-        depth=()
-
-        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then depth=(--unshallow);
-        fi
-
-        # Freeze admission reads the explicit base and its release tag; an unreadable
-        fetch fails closed.
-
-        git "${auth[@]}" fetch --tags "${depth[@]}" origin ''+refs/heads/main:refs/remotes/origin/main''
-
-        '
+      run: "uv run --no-project --python \"$HELPER_PYTHON\" python - <<'PYTHON'\n\
+        import json, os, pathlib, subprocess\ntool_bin = subprocess.check_output(['uv',\
+        \ 'tool', 'dir', '--bin'], text=True).strip()\nbuilder = str(pathlib.Path(tool_bin)\
+        \ / 'project_manager')\nhead = subprocess.check_output(['git', 'rev-parse',\
+        \ 'HEAD'], text=True).strip()\nevent = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())\n\
+        partial = os.environ['GITHUB_EVENT_NAME'] == 'push' and os.environ.get('GITHUB_REF_TYPE')\
+        \ == 'branch'\nargv = [builder, 'ci', 'select', '--repo', '.', '--base', event.get('before')\
+        \ or 'missing',\n        '--head', head, '--json']\nif not partial:\n    argv.append('--all')\n\
+        if os.environ.get('TEST_REASONS'):\n    argv += ['--reasons', os.environ['TEST_REASONS']]\n\
+        destination = pathlib.Path(os.environ['RUNNER_TEMP']) / 'project-manager-test-selection.json'\n\
+        with destination.open('w') as output:\n    subprocess.run(argv, stdout=output,\
+        \ check=True)\ndecision = json.loads(destination.read_text())\nwith open(os.environ['GITHUB_OUTPUT'],\
+        \ 'a') as output:\n    output.write('path=' + str(destination) + '\\n')\n\
+        \    output.write('mode=' + decision['mode'] + '\\n')\nPYTHON\n"
     - name: Validation contract and declared hygiene
       id: checks
       if: ${{ steps.guard.outputs.validation == 'true' && fromJSON(steps.plan.outputs.plan).run_checks
         }}
       env:
+        PROJECT_MANAGER_RECORDS_PROOF: ${{ github.event_name == 'push' && github.ref
+          == 'refs/heads/main' && format('{0}/project-manager-records-proof/records-proof.json',
+          runner.temp) || '' }}
+        TEST_SELECTION: ${{ steps.selection.outputs.path }}
         EXTRA_MARKERS: ''
         SHARD: ${{ matrix.shard }}
         SHARD_INDEX: ${{ strategy.job-index }}
@@ -456,59 +518,11 @@ jobs:
         \ checks failed (exit $status); raw diagnostics withheld\"; fi; rm -f \"$log\"\
         \ \"$CHECK_DOCUMENT\"; exit \"$status\"' EXIT\nuv run --no-project --python\
         \ \"$HELPER_PYTHON\" python - >\"$log\" 2>&1 <<'PYTHON'\nimport json, os,\
-        \ pathlib, shlex, subprocess, sys, tomllib\n\n\ndef redact(node):\n    \"\"\
-        \"A result without its failure summaries' first lines (they quote test output);\
-        \ ids and counts stay.\"\"\"\n    if isinstance(node, list):\n        return\
-        \ [redact(item) for item in node]\n    if isinstance(node, dict):\n      \
-        \  return {key: redact(value) for key, value in node.items()\n           \
-        \     if not (key == 'lines' and {'tests', 'total'} <= node.keys())}\n   \
-        \ return node\n\n\ndef land(builder, env, shard_args, check_document, index,\
-        \ total):\n    \"\"\"The merge queue's staging branch (t175, design section\
-        \ 5 Q6): the admitted base's requirements decide the\n    gate, as they do\
-        \ locally (check --stage ci would read the candidate's own declaration). The\
-        \ plan and this\n    job's result go to an artifact named for the commit and\
-        \ shard (policy ci.yaml land.artifact).\"\"\"\n    temp = pathlib.Path(env['RUNNER_TEMP'])\n\
-        \    # Landing records stay outside the checkout, as a data home does (land\
-        \ plan refuses one inside it).\n    env['PROJECT_MANAGER_DATA_HOME'] = str(temp\
-        \ / 'project-manager-land-home')\n    # The candidate snapshot's uv runs use\
-        \ the environment acquired while the deploy keys existed.\n    env['UV_PROJECT_ENVIRONMENT']\
-        \ = str(pathlib.Path('.venv').resolve())\n    planned = subprocess.run([builder,\
-        \ 'land', 'plan', '--repo', '.', '--base', 'origin/main',\n              \
-        \                '--candidate', 'HEAD', '--json'], env=env, capture_output=True,\
-        \ text=True)\n    sys.stderr.write(planned.stderr)\n    try:\n        issued\
-        \ = json.loads(planned.stdout)\n    except ValueError:\n        issued = {}\n\
-        \    if (planned.returncode or not isinstance(issued, dict) or not isinstance(issued.get('digest'),\
-        \ str)\n            or not isinstance(issued.get('plan'), dict)):\n      \
-        \  # Plan's own answer (status, reason, reason_code) is the step's result,\
-        \ so the log shows why; the\n        # fixed text only when plan printed nothing\
-        \ parseable (a pass without its plan included).\n        if isinstance(issued,\
-        \ dict) and issued.get('status') not in (None, 'pass'):\n            answer\
-        \ = {key: issued[key] for key in ('status', 'reason', 'reason_code') if key\
-        \ in issued}\n            if env.get('REPOSITORY_PRIVATE') != 'true':\n  \
-        \              answer = redact(answer)\n        else:\n            answer\
-        \ = {'status': 'unknown', 'reason': 'land plan refused or unreadable',\n \
-        \                     'reason_code': 'infrastructure'}\n        with open(check_document,\
-        \ 'w') as document:\n            json.dump(answer, document, sort_keys=True)\n\
-        \        return planned.returncode or 2\n    checked = subprocess.run([builder,\
-        \ 'land', 'check', '--repo', '.', '--plan', issued['digest'], '--json',\n\
-        \                              *shard_args], env=env, capture_output=True,\
-        \ text=True)\n    sys.stderr.write(checked.stderr)\n    try:\n        result\
-        \ = json.loads(checked.stdout)\n    except ValueError:\n        result = {'status':\
-        \ 'unknown', 'reason': 'land check printed no result'}\n    if env.get('REPOSITORY_PRIVATE')\
-        \ != 'true':\n        # Public logs and artifacts are disclosures: failing\
-        \ test ids stay, their failure lines do not.\n        result = redact(result)\n\
-        \    with open(check_document, 'w') as document:\n        json.dump(result,\
-        \ document, sort_keys=True)\n    folder = temp / 'project-manager-land-artifact'\n\
-        \    folder.mkdir(exist_ok=True)\n    (folder / 'plan.json').write_text(json.dumps(issued['plan'],\
-        \ sort_keys=True))\n    (folder / 'result.json').write_text(json.dumps(result,\
-        \ sort_keys=True))\n    name = 'land-{commit}-shard-{index}-of-{total}'.format(commit=env['GITHUB_SHA'],\
-        \ index=index, total=total)\n    with open(env['GITHUB_OUTPUT'], 'a') as output:\n\
-        \        output.write('land_artifact=' + name + '\\n')\n    return checked.returncode\n\
-        \n\nenv = os.environ.copy()\nextra = env.pop('EXTRA_MARKERS')\ncheck_document\
-        \ = env.pop('CHECK_DOCUMENT')\nshard, index, total = env.pop('SHARD', ''),\
-        \ int(env.pop('SHARD_INDEX', '0')), int(env.pop('SHARD_TOTAL', '1'))\nif extra:\n\
-        \    # Read the consumer's selection; an explicit release expression adds\
-        \ to it.\n    settings = tomllib.loads(pathlib.Path('pyproject.toml').read_text())\n\
+        \ pathlib, shlex, subprocess, tomllib\nenv = os.environ.copy()\nextra = env.pop('EXTRA_MARKERS')\n\
+        check_document = env.pop('CHECK_DOCUMENT')\nshard, index, total = env.pop('SHARD',\
+        \ ''), int(env.pop('SHARD_INDEX', '0')), int(env.pop('SHARD_TOTAL', '1'))\n\
+        if extra:\n    # Read the consumer's selection; an explicit release expression\
+        \ adds to it.\n    settings = tomllib.loads(pathlib.Path('pyproject.toml').read_text())\n\
         \    addopts = settings.get('tool', {}).get('pytest', {}).get('ini_options',\
         \ {}).get('addopts', '')\n    options = shlex.split(addopts) if isinstance(addopts,\
         \ str) else addopts\n    expression = None\n    for position, option in enumerate(options):\n\
@@ -527,23 +541,69 @@ jobs:
         if total > 1:\n    # The job name carries matrix.shard and the selection job-index\
         \ + 1; ci sync lists 1..N in order.\n    if shard != str(index + 1):\n   \
         \     raise SystemExit('CI shard matrix must list 1..N in order; run ci sync')\n\
-        \    shard_args = ['--shard', f'{index + 1}/{total}']\nland_branch = env.pop('LAND_BRANCH',\
-        \ '')\nif land_branch and env.get('GITHUB_EVENT_NAME') == 'push' and env.get('GITHUB_REF')\
-        \ == 'refs/heads/' + land_branch:\n    raise SystemExit(land(builder, env,\
-        \ shard_args, check_document, index + 1 if total > 1 else 1, total))\nargv\
-        \ = [builder, 'check', '--stage', 'ci', '--rerun-failed-once', *shard_args]\n\
-        if env.get('REPOSITORY_PRIVATE') == 'true':\n    # Private logs already replay\
-        \ raw diagnostics; the bounded summary names the failing tests.\n    argv.append('--failure-summary')\n\
+        \    shard_args = ['--shard', f'{index + 1}/{total}']\nargv = [builder, 'check',\
+        \ '--stage', 'ci', '--rerun-failed-once', *shard_args]\nselected = env.pop('TEST_SELECTION',\
+        \ '')\nif selected:\n    argv += ['--test-selection', selected]\nif env.get('REPOSITORY_PRIVATE')\
+        \ == 'true':\n    # Private logs already replay raw diagnostics; the bounded\
+        \ summary names the failing tests.\n    argv.append('--failure-summary')\n\
         with open(check_document, 'w') as document:\n    result = subprocess.run(argv,\
         \ env=env, stdout=document)\nraise SystemExit(result.returncode)\nPYTHON\n"
-    - name: Upload landing evidence
-      if: ${{ !cancelled() && steps.checks.outputs.land_artifact != '' }}
+    - name: Records check
+      id: records
+      if: ${{ steps.guard.outputs.validation == 'true' && fromJSON(steps.plan.outputs.plan).records
+        && strategy.job-index == 0 }}
+      shell: bash
+      run: "log=$(mktemp \"$RUNNER_TEMP/project-manager-log.XXXXXX\")\nCHECK_DOCUMENT=$(mktemp\
+        \ \"$RUNNER_TEMP/project-manager-checks.XXXXXX\")\nexport CHECK_DOCUMENT\n\
+        trap 'status=$?; cat \"$CHECK_DOCUMENT\"; if [ \"${REPOSITORY_PRIVATE:-}\"\
+        \ = true ]; then cat \"$log\"; elif [ \"$status\" -ne 0 ]; then echo \"::error::CI\
+        \ checks failed (exit $status); raw diagnostics withheld\"; fi; rm -f \"$log\"\
+        \ \"$CHECK_DOCUMENT\"; exit \"$status\"' EXIT\nuv run --isolated --no-project\
+        \ --python \"$HELPER_PYTHON\" python - >\"$log\" 2>&1 <<'PYTHON'\nimport json,\
+        \ os, pathlib, re, subprocess\nenv = os.environ.copy()\ncheck_document = env.pop('CHECK_DOCUMENT')\n\
+        pushed = json.loads(pathlib.Path(env['GITHUB_EVENT_PATH']).read_text())\n\
+        before = pushed.get('before') if isinstance(pushed, dict) else None\nif not\
+        \ isinstance(before, str) or not re.fullmatch(r'[0-9a-f]{40}', before):\n\
+        \    raise SystemExit('Records check needs the push base')\n# Resolve the\
+        \ isolated tool before exposing consumer executables on PATH.\ntool_bin =\
+        \ subprocess.check_output(['uv', 'tool', 'dir', '--bin'], text=True).strip()\n\
+        builder = str(pathlib.Path(tool_bin) / 'project_manager')\nenv['PATH'] = str(pathlib.Path('.venv/bin').resolve())\
+        \ + os.pathsep + env['PATH']\nkept = str(pathlib.Path(env['RUNNER_TEMP'])\
+        \ / 'project-manager-records-base-proof.json')\nargv = [builder, 'check',\
+        \ '--stage', 'ci', '--records-since', before, '--records-base-proof', kept,\n\
+        \        '--rerun-failed-once']\nif env.get('REPOSITORY_PRIVATE') == 'true':\n\
+        \    argv.append('--failure-summary')\nwith open(check_document, 'w') as document:\n\
+        \    result = subprocess.run(argv, env=env, stdout=document)\nif result.returncode\
+        \ == 0:\n    records = json.loads(pathlib.Path(check_document).read_text()).get('records')\
+        \ or {}\n    base = records.get('base')\n    if records.get('class') != 'records'\
+        \ or not isinstance(base, str) or not re.fullmatch(r'[0-9a-f]{40}', base):\n\
+        \        raise SystemExit('Records check passed without naming its records\
+        \ base')\n    folder = pathlib.Path(env['RUNNER_TEMP']) / 'project-manager-records-base'\n\
+        \    folder.mkdir(exist_ok=True)\n    (folder / 'records-base.json').write_text(json.dumps({'base':\
+        \ base}, sort_keys=True))\n    with open(env['GITHUB_OUTPUT'], 'a') as output:\n\
+        \        output.write('base=' + base + '\\n')\nraise SystemExit(result.returncode)\n\
+        PYTHON\n"
+    - name: Upload records base
+      if: ${{ !cancelled() && steps.records.outcome == 'success' && steps.records.outputs.base
+        != '' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
-        name: ${{ steps.checks.outputs.land_artifact }}
-        path: ${{ runner.temp }}/project-manager-land-artifact
+        name: ${{ format('records-base-{0}', steps.records.outputs.base) }}
+        path: ${{ runner.temp }}/project-manager-records-base
         if-no-files-found: error
-        retention-days: 7
+        overwrite: true
+        retention-days: 90
+    - name: Upload records proof
+      if: ${{ !cancelled() && steps.checks.outcome == 'success' && github.event_name
+        == 'push' && github.ref == 'refs/heads/main' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: ${{ strategy.job-total > 1 && format('records-proof-{0}-of-{1}', matrix.shard,
+          strategy.job-total) || 'records-proof' }}
+        path: ${{ runner.temp }}/project-manager-records-proof
+        if-no-files-found: ignore
+        overwrite: true
+        retention-days: 14
     - name: Declared drift check
       if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.guard.outputs.drift
         == 'true' && !(github.event_name == 'push' && github.ref_type == 'tag') &&
@@ -589,15 +649,18 @@ jobs:
         \ verify-tag --tag \"$RELEASE_TAG\" --release-path \"$release_path\") || status=$?\n\
         printf '%s\\n' \"$document\"\nif [ \"$status\" -ne 0 ]; then exit \"$status\"\
         ; fi\n# An advisory verdict becomes a run annotation carrying the verifier's\
-        \ own reason.\nprintf '%s' \"$document\" | uv run --no-project --python \"\
-        $HELPER_PYTHON\" python -c '\nimport json, sys\ndocument = json.load(sys.stdin)\n\
-        if document.get(\"status\") == \"advisory\":\n    escaped = document[\"reason\"\
-        ].replace(\"%\", \"%25\").replace(\"\\r\", \"%0D\").replace(\"\\n\", \"%0A\"\
-        )\n    print(\"::warning title=tag-verify::\" + escaped)'\n"
+        \ own reason. This step holds the\n# token, so the helper reads no uv configuration\
+        \ (--no-config).\nprintf '%s' \"$document\" | uv run --isolated --no-project\
+        \ --no-config --python \"$HELPER_PYTHON\" python -c '\nimport json, sys\n\
+        document = json.load(sys.stdin)\nif document.get(\"status\") == \"advisory\"\
+        :\n    escaped = document[\"reason\"].replace(\"%\", \"%25\").replace(\"\\\
+        r\", \"%0D\").replace(\"\\n\", \"%0A\")\n    print(\"::warning title=tag-verify::\"\
+        \ + escaped)'\n"
     - name: Remove local CI plan
       if: ${{ always() }}
       shell: bash
       run: rm -f "$RUNNER_TEMP/project-manager-plan.json" "$RUNNER_TEMP/project-manager-summary.json"
-        "$RUNNER_TEMP/project-manager-drift.json"
-    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pm-queue'
-      || startsWith(github.ref, 'refs/tags/v') }}
+        "$RUNNER_TEMP/project-manager-drift.json" "$RUNNER_TEMP/project-manager-records-plan.json"
+        "$RUNNER_TEMP/project-manager-records-base-proof.json"
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+      }}
