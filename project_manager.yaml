@@ -1,5 +1,4 @@
 schema: 1 # derived: The declaration.load schema implemented by this package.
-builder: v0.17.1 # reviewed: moved by project_manager upgrade (project_manager v0.17.1 rollout, 2026-10-23: docs-only and declaration-only merges run no tests, project_manager t299); earlier: moved by project_manager upgrade (project_manager v0.17.0 rollout, 2026-10-22: no tests by default, a listed reason raises them, project_manager t296); earlier: moved by project_manager upgrade (project_manager v0.14.0 rollout, 2026-10-19).
 project: llm_utils # derived: the estate registry path for this project matches the checkout (including linked worktrees); registry key name withheld because this repo is public
 capabilities: # inferred: checkout and registry evidence
   - library # reviewed: consumer repos pin this package by tag in their Python dependencies (design section 4); consumer names withheld because this repo is public
