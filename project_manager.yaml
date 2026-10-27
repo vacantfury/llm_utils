@@ -1,35 +1,16 @@
-schema: 1 # derived: The declaration.load schema implemented by this package.
-project: llm_utils # derived: the estate registry path for this project matches the checkout (including linked worktrees); registry key name withheld because this repo is public
-capabilities: # inferred: checkout and registry evidence
-  - library # reviewed: consumer repos pin this package by tag in their Python dependencies (design section 4); consumer names withheld because this repo is public
+# Build facts only (project_manager redesign of 2026-10-27, section F): the effects floor, test and CI
+# overrides. Everything else is derived or lives in psyche's oikos map, autoflow.yaml or stores.yaml.
+schema: 1
+project: llm_utils
 facts:
-  relied_on: # reviewed: nothing added beyond the derived consumer pins
-    value: true
-    basis: "consumer repos pin tagged releases as their LLM-provider layer; the pins are derived, nothing further is declared"
-  trusted_state: # reviewed: the package holds code and packaged defaults only (src/llm_utils/defaults.yaml); no store of its own
-    value: true
-    basis: "derived from a registry reference-read edge into this package; the package itself holds code and packaged defaults only (src/llm_utils/defaults.yaml), and a declaration never contradicts a derived fact"
-  effects: [] # reviewed: no unattended job of its own; paid provider calls happen only when a consumer invokes them, under the per-run spend cap (src/llm_utils/spend.py:1-8); provider APIs are services, not third-party recipients
-validation: # inferred: evidence-supported checks only; adequacy needs review. Empty scaffolding only; absence of declared gaps is not coverage evidence.
+  effects: []
+validation:
   checks:
-    - {id: tests, run: [uv, run, pytest, -q], stages: [merge, ci, release, repair], covers: [code]} # inferred: tests/ and a pyproject.toml pytest dependency support the standard keyless command.
-    - {id: contract, builtin: contract, stages: [release]} # derived: contract.yaml exists; the builtin checks the provider contract at release.
-  gaps: # reviewed: marker and skip evidence; coverage not measured
-    - "no test carries the live marker (pyproject.toml:46-52), so real provider endpoints are never exercised; the keyless suite uses fakes (.github/workflows/tests.yml:1)"
-    - "the cluster-model factory test skips when no SLURM_CLUSTER model is registered (tests/test_factory.py:51)"
-hygiene: # reviewed: no Ruff usage evidence (pyproject, ruff.toml, workflows, pre-commit); explicit off, since T1 and above declare hygiene (design section 4); ruff enters at design section 12 step 10
-  lint: {tool: ruff, mode: off}
-ci: # derived: Literal main push/tag filters and schedules in existing GitHub workflows; no workflow is executed. Weekly test clock membership in the estate registry
-  runner: ubuntu-latest # reviewed: public repository: GitHub-hosted standard runners are free for public repositories, while a Ubicloud runner bills every job (project_manager t281, 2026-10-20)
-  transport: embedded # reviewed: public repository, so the full workflow is embedded in-repo (policy ci.yaml transport_visibility public: embedded); it replaces the hand-written keyless tests.yml (project_manager t53 rollout 2026-10-06)
-  triggers:
-    - main # derived: .github/workflows/tests.yml on.push.branches
-    - tags # derived: .github/workflows/tests.yml on.push.tags
-  test_clock:
-    cadence: weekly
-    basis: estate test clock weekly membership # reviewed: registry path withheld because this repo is public
-release: # inferred: highest local SemVer tag v9.0.0; CHANGELOG.md exists; source artifact for an evidenced library; contract.yaml exists
-  versioning: semver
-  changelog: CHANGELOG.md
-  artifact: source
-  contract: contract.yaml
+  - id: tests
+    run: [uv, run, pytest, -q]
+    stages: [merge, ci, release, repair]
+    covers: [code]
+  - id: contract
+    builtin: contract
+    stages: [release]
+ci: {runner: ubuntu-latest, transport: embedded}
