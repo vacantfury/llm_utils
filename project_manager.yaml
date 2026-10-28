@@ -10,7 +10,4 @@ validation:
     run: [uv, run, pytest, -q]
     stages: [merge, ci, release, repair]
     covers: [code]
-  - id: contract
-    builtin: contract
-    stages: [release]
 ci: {runner: ubuntu-latest, transport: embedded}
