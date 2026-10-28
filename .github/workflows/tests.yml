@@ -1,13 +1,45 @@
 name: keyless tests
+# This public repository cannot call the estate's private shared CI, so it follows the shared CI's test rule here:
+# a push to main runs only the tests its change reaches since this workflow's last green run (pytest-impacted, the
+# tool the shared CI uses); a tag, the Sunday schedule, a manual run, or a missing green base runs the whole suite.
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  schedule:
+    - cron: "17 6 * * 0"
+  workflow_dispatch:
 jobs:
   pytest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-groups
-      - run: uv run pytest -q
+      - name: Tests the change reaches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base=""
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/tests.yml/runs?branch=main&status=success&per_page=20" \
+              -q "[.workflow_runs[] | select(.head_sha != \"$GITHUB_SHA\")][0].head_sha // empty" 2>/dev/null || true)
+            if [ -n "$base" ] && ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=""; fi
+          fi
+          if [ -z "$base" ]; then
+            echo "the whole suite runs ($GITHUB_EVENT_NAME, no green base used)"
+            uv run pytest -q
+            exit $?
+          fi
+          set +e
+          uv run --with pytest-impacted==0.36.0 pytest -q --impacted --impacted-module=src/llm_utils \
+            --impacted-git-mode=branch --impacted-base-branch="$base" --impacted-no-merge-base --impacted-tests-dir=tests
+          code=$?
+          set -e
+          case $code in
+            0|1) echo "tests the change since ${base:0:12} reaches"; exit $code ;;
+            5) echo "no test reached by the change since ${base:0:12}"; exit 0 ;;
+            *) echo "selection failed (exit $code); the whole suite runs"; uv run pytest -q ;;
+          esac
