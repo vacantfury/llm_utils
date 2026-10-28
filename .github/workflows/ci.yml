@@ -24,7 +24,7 @@ jobs:
         run: |
           base=""
           if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ]; then
-            base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/tests.yml/runs?branch=main&status=success&per_page=20" \
+            base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=20" \
               -q "[.workflow_runs[] | select(.head_sha != \"$GITHUB_SHA\")][0].head_sha // empty" 2>/dev/null || true)
             if [ -n "$base" ] && ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=""; fi
           fi

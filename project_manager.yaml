@@ -1,5 +1,5 @@
-# Build facts only (project_manager redesign of 2026-10-27, section F): the effects floor, test and CI
-# overrides. Everything else is derived or lives in psyche's oikos map, autoflow.yaml or stores.yaml.
+# Build facts only (project_manager design section 10): the effects floor, test and CI overrides. Everything
+# else is derived or lives in psyche's oikos map, autoflow.yaml or stores.yaml.
 schema: 1
 project: llm_utils
 facts:
@@ -7,7 +7,16 @@ facts:
 validation:
   checks:
   - id: tests
-    run: [uv, run, pytest, -q]
-    stages: [merge, ci, release, repair]
-    covers: [code]
-ci: {runner: ubuntu-latest, transport: embedded}
+    run:
+    - uv
+    - run
+    - pytest
+    - -q
+    stages:
+    - merge
+    - ci
+    - release
+    - repair
+ci:
+  runner: ubuntu-latest
+  transport: embedded
