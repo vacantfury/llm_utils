@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: "17 6 * * 0"
   workflow_dispatch:
+# The job runs the repository's code and its PyPI dependencies, so its token only reads, whatever the repository's
+# default token permissions are (Hephaestus's builder review 6, 2026-10-29).
+permissions:
+  contents: read
+  actions: read
 jobs:
   pytest:
     runs-on: ubuntu-latest
@@ -16,18 +21,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-groups
-      - name: Tests the change reaches
+          persist-credentials: false
+      # The last green base is read with the run's own token before anything from the repository is installed or
+      # run, so no step that runs repository code holds the token; only the commit id reaches the test step.
+      - name: Last green commit
+        if: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          base=""
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ]; then
-            base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=20" \
-              -q "[.workflow_runs[] | select(.head_sha != \"$GITHUB_SHA\")][0].head_sha // empty" 2>/dev/null || true)
-            if [ -n "$base" ] && ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=""; fi
+          base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=20" \
+            -q "[.workflow_runs[] | select(.head_sha != \"$GITHUB_SHA\")][0].head_sha // empty" 2>/dev/null || true)
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "SELECTION_BASE=$base" >> "$GITHUB_ENV"
           fi
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: '0.13.6'
+      - run: uv sync --all-groups
+      - name: Tests the change reaches
+        run: |
+          base="${SELECTION_BASE:-}"
           if [ -z "$base" ]; then
             echo "the whole suite runs ($GITHUB_EVENT_NAME, no green base used)"
             uv run pytest -q
