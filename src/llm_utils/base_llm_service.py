@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, List, Optional, Tuple, TypeVar
 
 from ._logging import get_logger
 from . import spend as _spend
+from .prc_endpoint_policy import require_prc_allowed
 from .llm_model import ModelQuirk
 
 logger = get_logger(__name__)
@@ -210,7 +211,8 @@ _CONVERSATION_ENTRY_POINTS = frozenset({
 
 
 def _spend_guard(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap one paid entry point with the run spend cap (``llm_utils.spend``).
+    """Wrap one paid entry point with the mainland-endpoint opt-in
+    (``llm_utils.prc_endpoint_policy``) and the run spend cap (``llm_utils.spend``).
 
     Admission happens before the wrapped method runs, so a refused call sends
     nothing. Nested guarded calls on the same thread (``chat`` ->
@@ -218,6 +220,7 @@ def _spend_guard(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
     """
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
+        require_prc_allowed(getattr(self, "model", None))   # mainland endpoints are opt-in per process
         if _spend.in_guard() or not self._spend_capped():
             return fn(self, *args, **kwargs)
         if name in _CONVERSATION_ENTRY_POINTS:

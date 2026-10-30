@@ -69,10 +69,11 @@ class Provider(str, Enum):
         ``"prc"`` (mainland China) · ``"self"`` (our own hardware — no
         third party sees the data).
 
-        A transport FACT about the endpoint, not a policy: this package never
-        decides what may be sent where. Consumers with a data-routing policy
-        read this (with ``LLMModel.route_twins`` / ``us_route`` below) to pick
-        a route for a given payload.
+        A transport FACT about the endpoint. The one policy this package
+        applies to it: requests to ``"prc"`` routes are refused unless the
+        process opts in (``llm_utils.prc_endpoint_policy``). Consumers read
+        this (with ``LLMModel.route_twins`` / ``us_route`` below) to pick a
+        route for a given payload.
         """
         return _PROVIDER_JURISDICTION[self]
 

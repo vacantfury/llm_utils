@@ -13,8 +13,10 @@ them (LLM-judge calls / evals / sweeps over PUBLIC benchmark responses) and
 NEVER personal data. xAI is US jurisdiction, same posture as the other US
 frontier providers. OpenRouter is a US aggregator over hosted open weights —
 with a zero-data-retention routing policy enabled on the account it is the
-US-jurisdiction route to Chinese open-weight models. This package is transport
-only; each consumer enforces its own routing policy on top.
+US-jurisdiction route to Chinese open-weight models. Requests to the three
+mainland endpoints are refused unless the process opts in
+(``llm_utils.prc_endpoint_policy``); balance lookups carry no content and stay
+allowed.
 """
 import os
 

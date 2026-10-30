@@ -35,6 +35,12 @@ from .claude_api_policy import (
     claude_api_allowed,
     is_claude_model,
 )
+from .prc_endpoint_policy import (
+    ALLOW_ENV as PRC_ENDPOINTS_ALLOW_ENV,
+    PRCEndpointNotAllowed,
+    is_prc_route,
+    prc_endpoints_allowed,
+)
 # Default durable usage record (optional agent_manager call ledger)
 from . import call_ledger
 # Package configuration (packaged YAML defaults + per-project override)
@@ -92,6 +98,10 @@ __all__ = [
     "ClaudeAPINotAllowed",
     "claude_api_allowed",
     "is_claude_model",
+    "PRC_ENDPOINTS_ALLOW_ENV",
+    "PRCEndpointNotAllowed",
+    "is_prc_route",
+    "prc_endpoints_allowed",
     # Default usage record (call ledger, optional)
     'call_ledger',
     # Configuration (YAML defaults + per-project override)
