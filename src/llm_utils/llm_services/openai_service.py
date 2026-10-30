@@ -23,7 +23,7 @@ from ..base_llm_service import (
     BaseLLMService, _backoff_seconds, is_account_fatal_error, is_rate_limit_error,
     make_mechanism_error,
 )
-from ..call_ledger import STATUS_TIMEOUT
+from ..usage_callback import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from ..broker import consumer_route, UnsupportedAPI
 from .. import constants as _constants  # noqa: F401  (side effect: load_dotenv)

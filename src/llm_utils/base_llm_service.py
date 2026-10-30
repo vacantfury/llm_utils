@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, List, Optional, Tuple, TypeVar
 
 from ._logging import get_logger
 from . import spend as _spend
+from . import usage_callback as _usage_callback
 from .prc_endpoint_policy import require_prc_allowed
 from .llm_model import ModelQuirk
 
@@ -297,9 +298,10 @@ class BaseLLMService(ABC):
     # "timeout") and error_class= (the exception class name) — but only when
     # the hook declares those keywords (or **kwargs); an older hook is never
     # called for a failure.
-    # Default when NO hook is installed: if the optional `agent_manager`
-    # package is importable, each call lands one row in its call ledger
-    # (llm_utils.call_ledger.record_call; a hook can chain to it).
+    # Default when NO hook is installed: each call is handed, as one dict, to
+    # the process-wide usage callback if a caller registered one
+    # (llm_utils.set_usage_callback; llm_utils.usage_callback.report, which a
+    # hook can chain to). With neither, nothing beyond UsageStats is recorded.
     # Paid entry points admitted against the run spend cap (llm_utils.spend)
     # before they send anything. Every subclass that defines one of these
     # methods gets it wrapped at class creation (``__init_subclass__``); a
@@ -371,9 +373,9 @@ class BaseLLMService(ABC):
         # Free-form accounting tag for the usage hook (set via
         # LLMServiceFactory.create(..., label=...)). None = unlabeled.
         self.usage_label: Optional[str] = None
-        # Call-ledger launch point (set directly or via
-        # LLMServiceFactory.create(..., launch_point=...)). None = resolve
-        # from the calling module (see llm_utils.call_ledger).
+        # Usage-record launch point (set directly or via
+        # LLMServiceFactory.create(..., launch_point=...)). None = the calling
+        # module's name (see llm_utils.usage_callback).
         self.launch_point: Optional[str] = None
 
     def _record_usage(
@@ -398,12 +400,8 @@ class BaseLLMService(ABC):
                         f"usage hook failed ({str(e)[:90]}) — "
                         f"calls proceed unrecorded this process")
         else:
-            try:
-                from .call_ledger import record_call
-                record_call(self, input_tokens, output_tokens, cost,
-                            is_test=is_test, label=self.usage_label)
-            except Exception:  # noqa: BLE001 — accounting never kills a call
-                pass
+            _usage_callback.report(self, input_tokens, output_tokens, cost,
+                                   is_test=is_test, label=self.usage_label)
 
     @classmethod
     def _hook_takes_failures(cls, hook: Callable[..., None]) -> bool:
@@ -430,14 +428,13 @@ class BaseLLMService(ABC):
         failures with no exception (an errored batch item). Never raises.
         """
         try:
-            from .call_ledger import STATUS_ERROR, STATUS_TIMEOUT
             if isinstance(error, BaseException):
                 error_class = type(error).__name__
                 if status is None and is_timeout_error(error):
-                    status = STATUS_TIMEOUT
+                    status = _usage_callback.STATUS_TIMEOUT
             else:
                 error_class = str(error)
-            status = status or STATUS_ERROR
+            status = status or _usage_callback.STATUS_ERROR
         except Exception:  # noqa: BLE001 — accounting never kills a call
             return
         hook = BaseLLMService._usage_hook
@@ -462,13 +459,9 @@ class BaseLLMService(ABC):
                         f"({str(e)[:90]}) — failed-call rows may be missing "
                         f"this process")
         else:
-            try:
-                from .call_ledger import record_call
-                record_call(self, 0, 0, 0.0, is_test=is_test,
-                            label=self.usage_label, status=status,
-                            error_class=error_class)
-            except Exception:  # noqa: BLE001 — accounting never kills a call
-                pass
+            _usage_callback.report(self, 0, 0, 0.0, is_test=is_test,
+                                   label=self.usage_label, status=status,
+                                   error_class=error_class)
 
     def _accepts_temperature(self) -> bool:
         """Single source of truth for the temperature quirk across ALL providers.

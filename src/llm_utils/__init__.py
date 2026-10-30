@@ -41,8 +41,9 @@ from .prc_endpoint_policy import (
     is_prc_route,
     prc_endpoints_allowed,
 )
-# Default durable usage record (optional agent_manager call ledger)
-from . import call_ledger
+# Default usage record: one dict per call to a caller-registered callback
+from . import usage_callback
+from .usage_callback import set_usage_callback
 # Package configuration (packaged YAML defaults + per-project override)
 from . import config
 # Run spend cap on paid API calls (config spend_cap.max_usd_per_run)
@@ -102,8 +103,9 @@ __all__ = [
     "PRCEndpointNotAllowed",
     "is_prc_route",
     "prc_endpoints_allowed",
-    # Default usage record (call ledger, optional)
-    'call_ledger',
+    # Default usage record (caller-registered callback)
+    'usage_callback',
+    'set_usage_callback',
     # Configuration (YAML defaults + per-project override)
     'config',
     # Run spend cap

@@ -5,6 +5,7 @@ import pytest
 import llm_utils
 from llm_utils import (
     BaseLLMService, CreditsExhaustedError, LLMModel, LLMServiceFactory, is_mechanism_error,
+    set_usage_callback,
 )
 from llm_utils import testing
 from llm_utils.testing import FakeService, check_exception_contract, use_fake_service
@@ -68,17 +69,16 @@ class TestFakeService:
         assert fake.total_usage.inference_count == 1
         assert fake.total_usage.cost > 0
 
-    def test_usage_hook_called_but_no_default_ledger(self, monkeypatch):
+    def test_usage_hook_called_but_no_default_callback(self):
         seen = []
-        import llm_utils.call_ledger as ledger
-        monkeypatch.setattr(ledger, "record_call",
-                            lambda *a, **k: pytest.fail("wrote the default ledger"))
-        FakeService(LLMModel.GPT_4O).chat("no hook installed")
-        BaseLLMService.set_usage_hook(lambda model, i, o, c, **kw: seen.append((model, c)))
+        set_usage_callback(lambda record: pytest.fail("reported to the default callback"))
         try:
+            FakeService(LLMModel.GPT_4O).chat("no hook installed")
+            BaseLLMService.set_usage_hook(lambda model, i, o, c, **kw: seen.append((model, c)))
             FakeService(LLMModel.GPT_4O).chat("hook installed")
         finally:
             BaseLLMService.clear_usage_hook()
+            set_usage_callback(None)
         assert seen and seen[0][0] is LLMModel.GPT_4O
 
 

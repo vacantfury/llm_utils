@@ -186,9 +186,9 @@ class LLMServiceFactory:
             label: Accounting tag for this instance's calls, passed to the
                 usage hook (see ``BaseLLMService.set_usage_hook``) — for the
                 consumer's bookkeeping only, never behavior.
-            launch_point: Call-ledger launch point for this instance's calls
-                (the default usage record, see ``llm_utils.call_ledger``).
-                None = resolved from the calling module.
+            launch_point: Launch point for this instance's calls in the
+                default usage record (see ``llm_utils.set_usage_callback``).
+                None = the calling module's name.
             **kwargs: Additional arguments passed to the service constructor.
                 These override loader defaults.
                 Common kwargs:

@@ -21,7 +21,7 @@ from ..broker import consumer_route, UnsupportedAPI
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
 from ..claude_api_policy import require_claude_api_allowed
-from ..call_ledger import STATUS_TIMEOUT
+from ..usage_callback import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from ..media_utils import encode_image_to_b64
 from .._logging import get_logger

@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover
 import google.genai as genai
 
 from ..base_llm_service import BaseLLMService, make_mechanism_error
-from ..call_ledger import STATUS_TIMEOUT
+from ..usage_callback import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from .._logging import get_logger
 

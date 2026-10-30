@@ -1,16 +1,14 @@
-"""Failed calls leave one call-ledger row (status error | timeout, an error
+"""Failed calls leave one usage record (status error | timeout, an error
 class, zero tokens and cost), recorded once per final outcome: a retry that
-later succeeds records only its success. Provider clients are faked and a fake
-agent_manager ledger is injected — no network, no keys, no real ledger."""
+later succeeds records only its success. Provider clients are faked and a
+collecting usage callback is registered — no network, no keys, no real ledger."""
 
 import asyncio
-import sys
-import types
 from types import SimpleNamespace
 
 import pytest
 
-from llm_utils import LLMModel, call_ledger, is_mechanism_error
+from llm_utils import LLMModel, is_mechanism_error, set_usage_callback
 from llm_utils.base_llm_service import BaseLLMService
 from llm_utils.exceptions import CreditsExhaustedError
 from llm_utils.llm_services import (
@@ -48,21 +46,13 @@ def reset_hook_state():
 
 @pytest.fixture()
 def rows(monkeypatch):
-    """The fake ledger's rows; no usage hook installed (default recorder)."""
+    """The usage callback's records; no usage hook installed (default recorder)."""
     out = []
-    pkg = types.ModuleType("agent_manager")
-    ledger = types.ModuleType("agent_manager.ledger")
-    ledger.record = lambda **fields: out.append(fields) or fields
-    pkg.ledger = ledger
-    monkeypatch.setitem(sys.modules, "agent_manager", pkg)
-    monkeypatch.setitem(sys.modules, "agent_manager.ledger", ledger)
-    call_ledger.census_id.cache_clear()
-    call_ledger.repo_of.cache_clear()
+    set_usage_callback(out.append)
     BaseLLMService.clear_usage_hook()
     yield out
     BaseLLMService.clear_usage_hook()
-    call_ledger.census_id.cache_clear()
-    call_ledger.repo_of.cache_clear()
+    set_usage_callback(None)
 
 
 def _failure(row, status, error_class):
@@ -122,7 +112,7 @@ class TestOpenAI:
         _openai_scripted(svc, RuntimeError("429 rate limit"), _openai_response("fine"))
         assert svc.chat("hi") == "fine"
         assert [r["status"] for r in rows] == ["ok"]
-        assert "error_class" not in rows[0]  # null in the real ledger
+        assert rows[0]["error_class"] is None
 
     def test_retries_exhausted_records_one_row(self, rows):
         svc = OpenAIService(LLMModel.GPT_5_NANO, max_retries=2, **KEY)

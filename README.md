@@ -354,6 +354,15 @@ BaseLLMService.set_usage_hook(my_ledger_writer)
 # Label a service's calls for attribution in that hook:
 service = LLMServiceFactory.create(LLMModel.GPT_5_MINI, label="eval-judge")
 
+# Default usage record when no hook is installed: one dict per call
+# (completed or failed) to a process-wide callback; None removes it.
+# Keys: launch_point, launch_point_source, caller_file, surface, host, model,
+# repo (always None), purpose, input_tokens, output_tokens, cost_usd,
+# is_test, status ("ok" | "error" | "timeout"), error_class.
+# With no callback registered, nothing is recorded beyond get_usage().
+from llm_utils import set_usage_callback
+set_usage_callback(lambda record: my_ledger.append(record))
+
 # Cluster serving lifecycle (SLURM/vLLM) — inject a server manager:
 LLMServiceFactory.set_server_manager(my_cluster_manager)
 
@@ -418,7 +427,7 @@ def test_llm_utils_exception_contract():
 `FakeService` follows the real services' return and error contract (a
 transport exception becomes a mechanism-error string; account-fatal errors
 raise), prices usage from the registry, calls your usage hook if one is
-installed, never writes the default call ledger, and goes through the spend
+installed, never reports to the default usage callback, and goes through the spend
 cap for paid models.
 
 ## Credentials

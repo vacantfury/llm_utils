@@ -20,8 +20,8 @@ as a pytest plugin.
 ``batch_chat`` / ``chat_structured`` follow the same return and error
 contract as the provider services, usage is counted in ``get_usage()`` from
 the model's registry prices, a consumer usage hook (if installed) is called,
-and paid-model fakes go through the run spend cap. It never writes the
-default call ledger, so a test run leaves no durable rows.
+and paid-model fakes go through the run spend cap. It never reports to the
+default usage callback, so a test run leaves no durable rows.
 """
 from __future__ import annotations
 
@@ -171,7 +171,7 @@ class FakeService(BaseLLMService):
         self._record_usage(*self._usage(prompt, str(answer)), is_test)
         return answer
 
-    # -- accounting: never the durable default ledger -----------------------
+    # -- accounting: never the default usage callback -----------------------
 
     def _record_usage(self, input_tokens, output_tokens, cost, is_test):
         if BaseLLMService._usage_hook is not None:
