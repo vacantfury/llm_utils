@@ -1,7 +1,8 @@
 name: keyless tests
 # This public repository cannot call the estate's private shared CI, so it follows the shared CI's test rule here:
-# a push to main runs only the tests its change reaches since this workflow's last green run (pytest-impacted, the
-# tool the shared CI uses); a tag, the Sunday schedule, a manual run, or a missing green base runs the whole suite.
+# a push to main runs only the tests its change reaches since the push before it (github.event.before, read with no
+# run history; pytest-impacted, the tool the shared CI uses); a tag, the Sunday schedule, a manual run, a new branch
+# or a forced history (no usable before) runs the whole suite.
 on:
   push:
     branches: [main]
@@ -22,19 +23,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # The last green base is read with the run's own token before anything from the repository is installed or
-      # run, so no step that runs repository code holds the token; only the commit id reaches the test step.
-      - name: Last green commit
+      # The base is the push before this one, the shared CI's rule (ci.selection_base; owner 2026-10-29): no run
+      # history is read. All zeros (a new branch, a forced history) or a commit this checkout lacks leaves no base.
+      - name: Selection base
         if: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
-        continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=20" \
-            -q "[.workflow_runs[] | select(.head_sha != \"$GITHUB_SHA\")][0].head_sha // empty" 2>/dev/null || true)
-          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "SELECTION_BASE=$base" >> "$GITHUB_ENV"
-          fi
+          case "$PUSH_BEFORE" in
+            *[!0-9a-f]*|'') ;;
+            *) if [ ${#PUSH_BEFORE} -eq 40 ] && [ -n "${PUSH_BEFORE//0/}" ] \
+                 && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                 echo "SELECTION_BASE=$PUSH_BEFORE" >> "$GITHUB_ENV"
+               fi ;;
+          esac
       - uses: astral-sh/setup-uv@v5
         with:
           version: '0.13.6'
@@ -43,7 +45,7 @@ jobs:
         run: |
           base="${SELECTION_BASE:-}"
           if [ -z "$base" ]; then
-            echo "the whole suite runs ($GITHUB_EVENT_NAME, no green base used)"
+            echo "the whole suite runs ($GITHUB_EVENT_NAME, no base)"
             uv run pytest -q
             exit $?
           fi
