@@ -72,8 +72,8 @@ the SLURM serving lifecycle moved to the owner's device-management layer in v6.0
   registry, or the mechanism-error contract gets a test in the same commit.
   Live verification stays a scratchpad smoke script (needs real keys via the
   consumer's own secret injection), never a committed test.
-- `text_docs/design.md` — founding record + reconciliation plan (three diverged copies
-  are being merged; this repo seeded from the most-current trunk).
+- `text_docs/design.md` — founding record + reconciliation record (how the three
+  vendored copies were merged into this trunk, and the rule for future divergence).
 - `text_docs/private/` — gitignored; site-specific cluster/account facts and consumer
   records live there, NEVER in committed files (owner order 2026-07-24).
 
