@@ -13,7 +13,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from itertools import zip_longest
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:  # Pillow is only needed for image messages; text-only use works without it
     import PIL.Image
@@ -25,6 +25,7 @@ from ..base_llm_service import BaseLLMService, make_mechanism_error
 from ..call_ledger import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from .._logging import get_logger
+from .ordered_parts import OrderedParts, is_text, tuple_view
 
 logger = get_logger(__name__)
 
@@ -113,12 +114,28 @@ class GoogleService(BaseLLMService):
 
     @staticmethod
     def _build_content_parts(
-        messages: List[Tuple[str, Optional[Any]]],
+        messages: List[Union[Tuple[str, Optional[Any]], OrderedParts]],
     ) -> list:
         """Convert conversation messages to a flat list of content parts
-        (strings and PIL images) that Google's API accepts."""
+        (strings and PIL images) that Google's API accepts.
+
+        A ``(text, image_or_None)`` tuple renders as today: the tuple's images
+        in order, then the text. An ``OrderedParts`` renders its text and image
+        parts in exactly the order given (``ordered_parts.py``).
+        """
         parts: list = []
-        for text, image in messages:
+        for message in messages:
+            if isinstance(message, OrderedParts):
+                for part in message.parts:
+                    if is_text(part):
+                        parts.append(part)
+                        continue
+                    if PIL is None:
+                        raise RuntimeError("image messages need Pillow: uv add pillow")
+                    parts.append(part if isinstance(part, PIL.Image.Image)
+                                 else PIL.Image.open(str(part)))
+                continue
+            text, image = message
             if image is None:
                 parts.append(text)
             else:
@@ -399,7 +416,7 @@ class GoogleService(BaseLLMService):
                 format_failed[cid] = make_mechanism_error(
                     f"message formatting failed: {e}")
 
-        if prepared and self._route_to_native_batch(conversations, max_tokens):
+        if prepared and self._route_to_native_batch(tuple_view(conversations), max_tokens):
             inline_reqs = self._build_inline_requests(
                 prepared, temperature, max_tokens, system_message
             )

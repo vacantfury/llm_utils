@@ -5,6 +5,32 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v8.5.0 — 2026-11-11 (MINOR: ordered message parts, additive)
+
+MINOR: new capability, additive, on the 8.x maintenance line.
+
+**Added:**
+
+- **`OrderedParts`** (exported from the seam): a user message given as an
+  ordered sequence of parts, each a `str` (text) or one image (a `PIL.Image`
+  or a `pathlib.Path`), placed in the message slot of a conversation in place
+  of the `(text, image_or_None)` tuple:
+  `batch_chat([(conv_id, [OrderedParts([image, "question"])])], ...)`. Every
+  service renders the parts in exactly the order given: SLURM / vLLM, OpenAI
+  and the OpenAI-compatible services (content blocks), Claude (content
+  blocks), Google (the flat parts list) and Bedrock (`converse` content
+  blocks). The local text-only service keeps the text parts in order (joined
+  by a newline) and drops the images, as it drops a tuple's. The native-batch
+  cost estimate reads an ordered message as its text and images.
+  `OrderedParts` is a type of its own and not iterable, so code that only
+  knows the tuple form fails loudly on it; a plain list in the message slot is
+  read as a tuple, as before.
+
+**Unchanged:** the `(text, image_or_None)` tuple keeps each provider's
+rendering byte for byte (text before images on SLURM, OpenAI, the
+OpenAI-compatible services and Bedrock; images before text on Claude and
+Google), as do conversation ids and every return shape.
+
 ## v8.4.0 — 2026-11-11 (MINOR: registry rows, additive)
 
 Registry-only, additive, on the 8.x maintenance line, for consumers still on

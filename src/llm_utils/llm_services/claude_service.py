@@ -13,7 +13,7 @@ always realtime.
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from anthropic import Anthropic
 from ..broker import consumer_route, UnsupportedAPI
@@ -23,6 +23,7 @@ from ..claude_api_policy import require_claude_api_allowed
 from ..call_ledger import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from ..media_utils import encode_image_to_b64
+from .ordered_parts import OrderedParts, image_path_or_object, is_text, tuple_view
 from .._logging import get_logger
 
 logger = get_logger(__name__)
@@ -137,11 +138,36 @@ class ClaudeService(BaseLLMService):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _image_block(img: Any) -> Dict[str, Any]:
+        b64, media_type = encode_image_to_b64(img)
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": b64,
+            },
+        }
+
+    @staticmethod
     def _format_conversation(
-        messages: List[Tuple[str, Optional[Any]]],
+        messages: List[Union[Tuple[str, Optional[Any]], OrderedParts]],
     ) -> List[Dict[str, Any]]:
+        """One conversation as Anthropic messages.
+
+        A ``(text, image_or_None)`` tuple renders as today: the tuple's images
+        in order, then the text. An ``OrderedParts`` renders its text and image
+        parts in exactly the order given (``ordered_parts.py``).
+        """
         anthropic_msgs: List[Dict[str, Any]] = []
-        for text, image in messages:
+        for message in messages:
+            if isinstance(message, OrderedParts):
+                anthropic_msgs.append({"role": "user", "content": [
+                    {"type": "text", "text": part} if is_text(part)
+                    else ClaudeService._image_block(image_path_or_object(part))
+                    for part in message.parts]})
+                continue
+            text, image = message
             if image is None:
                 anthropic_msgs.append({"role": "user", "content": text})
             else:
@@ -375,7 +401,7 @@ class ClaudeService(BaseLLMService):
                 format_failed[cid] = make_mechanism_error(
                     f"message formatting failed: {e}")
 
-        if prepared and self._route_to_native_batch(conversations, max_tokens):
+        if prepared and self._route_to_native_batch(tuple_view(conversations), max_tokens):
             batch = self._submit_batch(
                 prepared, system_message, temperature, max_tokens, extra)
             batch = self._poll_until_done(batch)

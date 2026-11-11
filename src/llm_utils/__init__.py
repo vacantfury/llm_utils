@@ -75,6 +75,8 @@ from .llm_services import (
     SlurmClusterService,
     BedrockService,
 )
+# An ordered user message (text and image parts in a fixed order, every route)
+from .llm_services import OrderedParts
 
 # Define what's exported
 __all__ = [
@@ -135,6 +137,9 @@ __all__ = [
     'LocalLMService',
     'SlurmClusterService',
     'BedrockService',
+
+    # Ordered user message (message slot of a conversation)
+    'OrderedParts',
 
     # Version
     '__version__'

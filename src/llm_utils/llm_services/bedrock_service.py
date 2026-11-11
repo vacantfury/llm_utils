@@ -19,7 +19,7 @@ Config knobs (constructor kwargs, or a consumer's config loader), all optional:
 import asyncio
 import base64
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..base_llm_service import (
     BaseLLMService, _backoff_seconds, is_account_fatal_error, is_rate_limit_error,
@@ -28,6 +28,7 @@ from ..base_llm_service import (
 from ..exceptions import FatalModelError, InvalidCredentialError
 from ..llm_model import LLMModel
 from ..media_utils import encode_image_to_b64
+from .ordered_parts import OrderedParts, image_path_or_object, is_text
 from .._logging import get_logger
 
 logger = get_logger(__name__)
@@ -131,23 +132,38 @@ class BedrockService(BaseLLMService):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _image_block(img: Any) -> Dict[str, Any]:
+        b64, mime = encode_image_to_b64(img)
+        raw = base64.b64decode(b64)
+        fmt = _BEDROCK_IMAGE_FORMATS.get((mime or "").lower(), "png")
+        return {"image": {"format": fmt, "source": {"bytes": raw}}}
+
+    @staticmethod
     def _format_messages(
-        messages: List[Tuple[str, Optional[Any]]],
+        messages: List[Union[Tuple[str, Optional[Any]], OrderedParts]],
     ) -> List[Dict[str, Any]]:
+        """One conversation as Bedrock ``converse`` messages.
+
+        A ``(text, image_or_None)`` tuple renders as today: the text, then the
+        tuple's images in order. An ``OrderedParts`` renders its text and image
+        parts in exactly the order given (``ordered_parts.py``).
+        """
         bedrock_msgs: List[Dict[str, Any]] = []
-        for text, image in messages:
+        for message in messages:
+            if isinstance(message, OrderedParts):
+                bedrock_msgs.append({"role": "user", "content": [
+                    {"text": part} if is_text(part)
+                    else BedrockService._image_block(image_path_or_object(part))
+                    for part in message.parts]})
+                continue
+            text, image = message
             content: List[Dict[str, Any]] = [{"text": text}]
             if image is not None:
                 images = image if isinstance(image, list) else [image]
                 for img in images:
                     if img is None:
                         continue
-                    b64, mime = encode_image_to_b64(img)
-                    raw = base64.b64decode(b64)
-                    fmt = _BEDROCK_IMAGE_FORMATS.get((mime or "").lower(), "png")
-                    content.append(
-                        {"image": {"format": fmt, "source": {"bytes": raw}}}
-                    )
+                    content.append(BedrockService._image_block(img))
             bedrock_msgs.append({"role": "user", "content": content})
         return bedrock_msgs
 

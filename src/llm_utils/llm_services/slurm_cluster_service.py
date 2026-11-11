@@ -6,7 +6,7 @@ Acquires an endpoint from the injected server manager for each batch call
 and releases it afterwards so multiple tasks can share the server pool.
 """
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx2
 from openai import AsyncOpenAI
@@ -16,6 +16,7 @@ from ..base_llm_service import (
 )
 from ..llm_model import LLMModel
 from ..media_utils import encode_image_to_b64
+from .ordered_parts import OrderedParts, openai_content
 from .._logging import get_logger
 
 logger = get_logger(__name__)
@@ -72,12 +73,23 @@ class SlurmClusterService(BaseLLMService):
 
     @staticmethod
     def _format_conversation(
-        messages: List[Tuple[str, Optional[Any]]], system_message: Optional[str],
+        messages: List[Union[Tuple[str, Optional[Any]], OrderedParts]],
+        system_message: Optional[str],
     ) -> List[Dict[str, Any]]:
+        """One conversation as OpenAI-schema chat messages for vLLM.
+
+        A ``(text, image_or_None)`` tuple renders as today: the text, then the
+        tuple's images in order. An ``OrderedParts`` renders its text and image
+        parts in exactly the order given (``ordered_parts.py``).
+        """
         openai_msgs: List[Dict[str, Any]] = []
         if system_message:
             openai_msgs.append({"role": "system", "content": system_message})
-        for text, image in messages:
+        for message in messages:
+            if isinstance(message, OrderedParts):
+                openai_msgs.append({"role": "user", "content": openai_content(message)})
+                continue
+            text, image = message
             if image is None:
                 openai_msgs.append({"role": "user", "content": text})
             else:
