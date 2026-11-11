@@ -5,6 +5,23 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v8.4.0 — 2026-11-11 (MINOR: registry rows, additive)
+
+Registry-only, additive, on the 8.x maintenance line, for consumers still on
+v8 (v9.0.0 made the per-process spend cap the default).
+
+**Added:**
+
+- **`INTERNVL3_5_8B`** — `OpenGVLab/InternVL3_5-8B` on `SLURM_CLUSTER`, the
+  successor of `INTERNVL3_8B` (same family and custom code; needs
+  `trust_remote_code`).
+- **`KIMI_VL_A3B_INSTRUCT`** — `moonshotai/Kimi-VL-A3B-Instruct` on
+  `SLURM_CLUSTER`, open weights served on the consumer's own GPUs (no mainland
+  endpoint); its processor needs `trust_remote_code`.
+- **`MIMO_VL_7B_RL_2508`** — `XiaomiMiMo/MiMo-VL-7B-RL-2508` on
+  `SLURM_CLUSTER`; it reasons by default, and `/no_think` as the last part of
+  the user turn turns reasoning off (model card).
+
 ### v8.3.0 (MINOR: new capability, additive)
 
 **Added:**
