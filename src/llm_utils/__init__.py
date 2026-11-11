@@ -64,8 +64,6 @@ from .exceptions import (
     AccountFatalError,
     InvalidCredentialError,
     CreditsExhaustedError,
-    BrokerError,
-    BrokerModeUnsupportedError,
     SpendCapExceededError,
     RetentionPolicyError,
 )
@@ -148,8 +146,6 @@ __all__ = [
     'AccountFatalError',
     'InvalidCredentialError',
     'CreditsExhaustedError',
-    'BrokerError',
-    'BrokerModeUnsupportedError',
 
     # Concrete services (one per serving route)
     'OpenAIService',

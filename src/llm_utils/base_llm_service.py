@@ -493,16 +493,6 @@ class BaseLLMService(ABC):
         empty balance dooms every task on this provider, so retrying other cells
         is wasted wall-clock and the run should stop with an actionable message.
         """
-        # SDKs may wrap a request-hook refusal in their connection error.
-        # Keep local broker refusals typed across that wrapper.
-        from .exceptions import BrokerError
-        cause = error if getattr(self, "_broker_route", None) is not None else None
-        seen = set()
-        while cause is not None and id(cause) not in seen:
-            if isinstance(cause, BrokerError):
-                raise cause
-            seen.add(id(cause))
-            cause = cause.__cause__
         provider = getattr(self.model, "provider", None)
         provider_name = getattr(provider, "value", None) or self.__class__.__name__
         detail = str(error)[:200]
@@ -553,7 +543,6 @@ class BaseLLMService(ABC):
         Network/auth failures propagate — a monitor must see a failed check
         as failed, never as "no balance data".
         """
-        self._require_direct_mode("Account status and management-key lookups")
         from .account_status import AccountStatus
         provider = getattr(self, "SERVICE_NAME", type(self).__name__)
         fetch = getattr(self, "_fetch_account_status", None)
@@ -561,27 +550,11 @@ class BaseLLMService(ABC):
             return AccountStatus(provider=provider, supported=False)
         return fetch()
 
-    def _require_direct_mode(self, operation: str) -> None:
-        if getattr(self, "_broker_route", None) is not None:
-            from .exceptions import BrokerModeUnsupportedError
-            raise BrokerModeUnsupportedError(f"{operation} unsupported in broker mode")
-
-    def _ensure_broker_open(self) -> None:
-        route = getattr(self, "_broker_route", None)
-        if route is not None:
-            route._ensure_open()
-
     def close(self) -> None:
-        """Revoke this service's broker grant and release its broker transports."""
-        route = getattr(self, "_broker_route", None)
-        if route is not None:
-            route.close()
+        """No-op: the base service holds no resources; a subclass may override."""
 
     async def aclose(self) -> None:
-        """Await broker grant revocation and transport cleanup."""
-        route = getattr(self, "_broker_route", None)
-        if route is not None:
-            await route.aclose()
+        """No-op: the base service holds no resources; a subclass may override."""
 
     def __enter__(self):
         return self
@@ -612,7 +585,6 @@ class BaseLLMService(ABC):
         Used by batch-API services (Google, Anthropic) whose `client.batches.*`
         calls are blocking. Non-rate-limit exceptions propagate immediately.
         """
-        self._ensure_broker_open()
         retries = self.max_retries if max_retries is None else max_retries
         for attempt in range(retries + 1):
             try:
@@ -639,7 +611,6 @@ class BaseLLMService(ABC):
     ) -> _T:
         """Async variant of `_retry_rate_limit_sync` for per-call async services
         (OpenAI, vLLM/SLURM_CLUSTER)."""
-        self._ensure_broker_open()
         retries = self.max_retries if max_retries is None else max_retries
         for attempt in range(retries + 1):
             try:
@@ -819,7 +790,6 @@ class BaseLLMService(ABC):
     ) -> str:
         """Submit a native batch WITHOUT waiting; returns the provider batch
         id. Persist the id anywhere and harvest from a later process."""
-        self._require_direct_mode('Native batch/file APIs')
         raise NotImplementedError(
             f"{type(self).__name__} has no native batch API "
             "(resumable batches exist on OpenAI, Anthropic, and Google services)"
@@ -827,7 +797,6 @@ class BaseLLMService(ABC):
 
     def batch_chat_status(self, batch_id: str) -> str:
         """The provider's status string for a previously submitted batch."""
-        self._require_direct_mode('Native batch/file APIs')
         raise NotImplementedError(
             f"{type(self).__name__} has no native batch API"
         )
@@ -836,7 +805,6 @@ class BaseLLMService(ABC):
         self, batch_id: str, *, is_test: bool = False,
     ) -> Optional[List[Tuple[str, str]]]:
         """Results of a previously submitted batch, or None while running."""
-        self._require_direct_mode('Native batch/file APIs')
         raise NotImplementedError(
             f"{type(self).__name__} has no native batch API"
         )

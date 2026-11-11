@@ -51,7 +51,7 @@ import httpx2
 from ..base_llm_service import BaseLLMService, _backoff_seconds
 from ..constants import OPENROUTER_ALPHA_API_URL, TYPESAFE_API_URL
 from ..exceptions import (
-    BrokerModeUnsupportedError, CreditsExhaustedError, FatalModelError,
+    CreditsExhaustedError, FatalModelError,
     InvalidCredentialError, RetentionPolicyError,
 )
 from ..llm_model import LLMModel, Provider
@@ -233,18 +233,12 @@ class TypeSafeService(BaseLLMService):
     API_KEY_ENV = "TYPESAFE_API_KEY"
     BASE_URL = TYPESAFE_API_URL
     SERVICE_NAME = "TypeSafe"
-    # Neither route goes through the credential broker (route availability
-    # reads this so a brokered provider's Jev row is not reported usable).
-    BROKER_SUPPORTED = False
     # evaluate is a paid entry point: admitted against the run spend cap.
     _SPEND_GUARDED = BaseLLMService._SPEND_GUARDED + ("evaluate",)
 
     def __init__(self, model: LLMModel, **kwargs):
         super().__init__(max_concurrency=kwargs.pop("max_concurrency", 8),
                          max_retries=kwargs.pop("max_retries", 3))
-        if os.getenv("LLM_UTILS_BROKER_URL") is not None:
-            raise BrokerModeUnsupportedError(
-                "TypeSafe is not a broker route; unset LLM_UTILS_BROKER_URL for this process")
         route = _ROUTES.get(model.provider)
         if route is None:
             raise ValueError(f"no Jev route for provider {model.provider.value!r} "

@@ -1,5 +1,6 @@
-"""TypeSafe Jev typed evaluation (t14). Offline: the HTTP layer is a fake;
-dummy key; no network."""
+"""Guards TypeSafeService, the TypeSafe Jev typed-evaluation seam consumers
+import, which spends money under the run spend cap and carries credentials
+(t14). Offline: the HTTP layer is a fake; dummy key; no network."""
 
 import httpx2
 import pytest
@@ -76,13 +77,6 @@ class TestRegistry:
         monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
         with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
             TypeSafeService(JEV)
-
-    def test_broker_mode_refused(self, monkeypatch):
-        monkeypatch.setenv("LLM_UTILS_BROKER_URL", "http://127.0.0.1:9")
-        from llm_utils import BrokerModeUnsupportedError
-        with pytest.raises(BrokerModeUnsupportedError):
-            TypeSafeService(JEV, api_key="k")
-        assert not route_status(JEV).usable
 
     def test_route_status_reads_the_key(self, monkeypatch):
         monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
@@ -367,9 +361,3 @@ class TestOpenRouterRoute:
         monkeypatch.setenv("OPENROUTER_API_KEY", "k")
         assert routes_for("jev-1.13") == {"typesafe", "openrouter"}
         assert usable_routes("jev-1.13") == (OR_JEV,)
-
-    def test_broker_mode_does_not_report_the_openrouter_row_usable(self, monkeypatch):
-        monkeypatch.setenv("LLM_UTILS_BROKER_URL", "http://127.0.0.1:9")
-        s = route_status(OR_JEV)
-        assert not s.usable and "not a broker route" in s.reason
-        assert route_status(LLMModel.OR_GLM_5).usable     # the chat rows still are

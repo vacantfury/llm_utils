@@ -18,9 +18,9 @@ Two questions, answered from this package's own facts only:
 - ``routes_for(logical)``: every registered route (pure registry lookup);
 - ``route_status(model)`` / ``usable_routes(logical)``: whether THIS process
   could build and call the route now. The default check reads configuration
-  only (key variables, the Claude API opt-in, the broker switch, installed
-  extras, a registered SLURM endpoint manager); ``probe=True`` adds one
-  unbilled request per API route (a model listing or an identity call).
+  only (key variables, the Claude API opt-in, installed extras, a registered
+  SLURM endpoint manager); ``probe=True`` adds one unbilled request per API
+  route (a model listing or an identity call).
 
 Transport facts only. Which route a payload SHOULD take, and which machine
 holds which credentials, are consumer and device-layer decisions made on top
@@ -40,7 +40,6 @@ from .claude_api_policy import ALLOW_ENV as CLAUDE_API_ALLOW_ENV, claude_api_all
 from .constants import OPENAI_API_URL, OPENROUTER_API_URL, TYPESAFE_API_URL
 from .llm_model import LLMModel, Provider
 
-BROKER_URL_ENV = "LLM_UTILS_BROKER_URL"   # same switch as llm_utils.broker
 ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
 GOOGLE_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 # Probe URLs where the model listing would not test the key: OpenRouter's
@@ -55,13 +54,6 @@ _REJECT_CODES = {Provider.GOOGLE: (400,)}
 _AWS_CONFIG_ENVS = ("AWS_ACCESS_KEY_ID", "AWS_PROFILE", "AWS_WEB_IDENTITY_TOKEN_FILE",
                     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
                     "AWS_CONTAINER_CREDENTIALS_FULL_URI")
-
-# Providers whose credentials a broker can stand in for (llm_utils.broker).
-_BROKERED = frozenset({
-    Provider.OPENAI, Provider.DEEPSEEK, Provider.ZAI, Provider.XAI,
-    Provider.MOONSHOT, Provider.OPENROUTER, Provider.ANTHROPIC,
-    Provider.GOOGLE, Provider.BEDROCK,
-})
 
 ModelRef = Union[str, LLMModel]
 
@@ -144,29 +136,6 @@ def _key_env(provider: Provider) -> Optional[str]:
     return getattr(_service_class(provider), "API_KEY_ENV", None)
 
 
-def _brokered(model: LLMModel) -> bool:
-    """A broker can stand in for this row's credential: its provider is a
-    broker route and the service built for the row supports it (TypeSafe's
-    Jev rows do not, OpenRouter's included)."""
-    from .llm_service_factory import LLMServiceFactory
-    cls = LLMServiceFactory.service_class_for(model)
-    return model.provider in _BROKERED and getattr(cls, "BROKER_SUPPORTED", True)
-
-
-def _broker_mode() -> bool:
-    return os.getenv(BROKER_URL_ENV) is not None
-
-
-def _broker_status() -> Tuple[bool, str]:
-    from .broker import _base_url
-    from .exceptions import BrokerError
-    try:
-        _base_url(os.getenv(BROKER_URL_ENV, ""))
-    except BrokerError:
-        return False, f"broker mode, but {BROKER_URL_ENV} is not a valid loopback URL"
-    return True, "broker mode: the broker holds the credential and decides the grant per call"
-
-
 def _bedrock_credentials() -> Tuple[bool, str]:
     """Configuration only: never resolves the credential chain (that may call
     instance metadata or run a credential_process); probe=True resolves it."""
@@ -188,10 +157,6 @@ def _config_status(model: LLMModel) -> Tuple[bool, str]:
     p = model.provider
     if p is Provider.ANTHROPIC and not claude_api_allowed():
         return False, f"Anthropic API calls are off in this process ({CLAUDE_API_ALLOW_ENV} is not 1)"
-    if _brokered(model) and _broker_mode():
-        return _broker_status()
-    if _broker_mode() and _key_env(p) is not None:
-        return False, "broker mode, and this route is not a broker route"
     if p is Provider.BEDROCK:
         return _bedrock_credentials()
     if p is Provider.LOCAL:
@@ -290,8 +255,8 @@ def route_status(model: ModelRef, *, probe: bool = False,
     ``route_statuses`` for all of them.
 
     ``probe=True`` sends one unbilled request when the configuration check
-    passes (skipped in broker mode: the broker decides per grant). ``timeout``
-    defaults to the ``routes.probe_timeout_s`` config value.
+    passes. ``timeout`` defaults to the ``routes.probe_timeout_s`` config
+    value.
     """
     if not isinstance(model, LLMModel):
         group = logical_models().get(model, ())
@@ -302,7 +267,7 @@ def route_status(model: ModelRef, *, probe: bool = False,
                 f"or use route_statuses({model!r})")
         model = LLMModel.from_string(model)
     ok, reason = _config_status(model)
-    if not ok or not probe or (_brokered(model) and _broker_mode()):
+    if not ok or not probe:
         return RouteStatus(model, ok, reason)
     t = config.get("routes.probe_timeout_s") if timeout is None else timeout
     result = _probe(model, t)

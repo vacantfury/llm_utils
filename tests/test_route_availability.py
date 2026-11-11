@@ -1,5 +1,6 @@
-"""Route availability seam (t10): logical model -> routes, and which routes this
-process can use. Offline: probes run against a fake HTTP layer."""
+"""Guards the route availability seam (t10), which consumers import: logical
+model -> routes, and which routes this process can use. Offline: probes run
+against a fake HTTP layer."""
 
 import httpx2
 import pytest
@@ -95,11 +96,6 @@ class TestConfigCheck:
         s = route_status(model)
         assert not s.usable and "LLM_UTILS_ALLOW_CLAUDE_API" in s.reason
 
-    def test_broker_mode_makes_api_routes_usable_without_keys(self, monkeypatch):
-        monkeypatch.setenv("LLM_UTILS_BROKER_URL", "http://127.0.0.1:9")
-        s = route_status(LLMModel.OR_GLM_5, probe=True)
-        assert s.usable and "broker" in s.reason and not s.probed
-
     def test_slurm_needs_a_registered_endpoint_manager(self):
         assert not route_status(LLMModel.LLAMA3_8B_CLUSTER).usable
         LLMServiceFactory.set_server_manager(object())
@@ -109,11 +105,6 @@ class TestConfigCheck:
         monkeypatch.setattr(routes_mod.importlib.util, "find_spec", lambda name: None)
         s = route_status(LLMModel.LLAMA3_8B)
         assert not s.usable and "torch" in s.reason
-
-    def test_broker_mode_with_an_invalid_url(self, monkeypatch):
-        monkeypatch.setenv("LLM_UTILS_BROKER_URL", "")
-        s = route_status(LLMModel.OR_GLM_5)
-        assert not s.usable and "valid loopback URL" in s.reason
 
     def test_route_status_refuses_a_multi_route_logical_name(self):
         with pytest.raises(ValueError, match="route_statuses"):

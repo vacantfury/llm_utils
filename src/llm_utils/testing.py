@@ -35,7 +35,7 @@ from . import spend as _spend
 from .base_llm_service import BaseLLMService, make_mechanism_error
 from .claude_api_policy import ClaudeAPINotAllowed
 from .exceptions import (
-    AccountFatalError, BrokerError, BrokerModeUnsupportedError, CreditsExhaustedError,
+    AccountFatalError, CreditsExhaustedError,
     FatalModelError, InvalidCredentialError, RetentionPolicyError, SpendCapExceededError,
 )
 from .llm_model import LLMModel
@@ -239,8 +239,6 @@ EXCEPTION_CONTRACT: Dict[type, type] = {
     InvalidCredentialError: AccountFatalError,
     CreditsExhaustedError: AccountFatalError,
     SpendCapExceededError: AccountFatalError,
-    BrokerError: RuntimeError,
-    BrokerModeUnsupportedError: BrokerError,
     ClaudeAPINotAllowed: PermissionError,
     RetentionPolicyError: PermissionError,
 }

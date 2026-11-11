@@ -32,15 +32,14 @@ def _find_dotenv_upward() -> Optional[str]:
         d = parent
 
 
-_broker_at_import = os.getenv("LLM_UTILS_BROKER_URL") is not None
-_dotenv_path = None if _broker_at_import else _find_dotenv_upward()
+_dotenv_path = _find_dotenv_upward()
 if _dotenv_path:
     load_dotenv(_dotenv_path, override=False)
 
 
 # API Keys (loaded from environment variables)
 def _provider_key(name: str) -> Optional[str]:
-    return None if _broker_at_import else os.getenv(name)
+    return os.getenv(name)
 
 
 OPENAI_API_KEY: Optional[str] = _provider_key("OPENAI_API_KEY")

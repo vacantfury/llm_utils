@@ -16,14 +16,14 @@ Pin a release tag as a git dependency (recommended — upgrades are a deliberate
 tag bump, so nothing changes under you mid-experiment):
 
 ```bash
-uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v5.0.0"
+uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v10.0.0"
 ```
 
 Heavy serving routes are extras; the core stays API-client-light:
 
 ```bash
-uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v5.0.0"    # torch + transformers
-uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v5.0.0"  # boto3
+uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v10.0.0"    # torch + transformers
+uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v10.0.0"  # boto3
 ```
 
 **Stability contract:** the public seam is what `llm_utils/__init__.py` exports.
@@ -148,7 +148,7 @@ route_status(LLMModel.BEDROCK_GLM_5, probe=True)
 ```
 
 The default check reads configuration only: the key variable, the Claude API
-opt-in, broker mode, installed extras, a registered SLURM endpoint manager.
+opt-in, installed extras, a registered SLURM endpoint manager.
 `probe=True` adds one unbilled request per API route (a model listing, or an
 AWS identity call for Bedrock); the timeout is the `routes.probe_timeout_s`
 config value. `RegistryRouteResolver` is the same lookup as an injectable
@@ -180,8 +180,7 @@ the version row (not the `jev-latest` alias). Retries 408/429/5xx (529 =
 overloaded) and dropped connections. The direct API has no per-request
 zero-retention switch: `evaluate(..., personal_data=True)` raises
 `RetentionPolicyError` unless the service was built with
-`zero_retention=True` under a written zero-retention agreement. Not available
-through the credential broker.
+`zero_retention=True` under a written zero-retention agreement.
 
 The same model is served by OpenRouter as `LLMModel.OR_JEV_1_13` (the dated id
 `typesafe/jev-1.13-20260917`, `OPENROUTER_API_KEY`); the factory builds a
@@ -453,40 +452,6 @@ Note on jurisdictions: DeepSeek, Z.AI, and Moonshot are direct mainland-China
 endpoints; OpenRouter is a US aggregator that can route to the same open-weight
 models. This package is transport only — each consumer enforces its own data
 routing policy on top.
-
-### Optional local credential broker
-
-Set `LLM_UTILS_BROKER_URL=http://127.0.0.1:PORT` before constructing a service
-to use a local HTTP credential broker. Only literal `127.0.0.1` HTTP URLs are
-accepted. Unset the variable to retain the normal provider SDK behavior.
-An empty or invalid value fails closed, as does a failed grant request.
-
-The client requests an inference grant with `POST /grants` (`run_id`, `routes`)
-and expects `id`, `surrogate`, `expires` (Unix seconds), `routes`, and
-`base_paths`. Requests go to `/proxy/ROUTE` plus that route's base path.
-`POST /revoke` with the surrogate revokes the grant on service `close()` or
-`aclose()`. Services also support `with` and `async with` for cleanup. Grants
-are never renewed or replayed automatically; construct a new service after
-expiration. Use `aclose()` when deterministic async transport cleanup is needed.
-
-Broker mode covers OpenAI, DeepSeek, Z.AI, xAI, Moonshot, OpenRouter,
-Anthropic, Google and Bedrock. Provider key arguments and environment variables
-are not used. SDK retries, application retries, environment proxies and HTTP
-redirects are disabled. Request hooks pin the destination, strip ambient auth
-and cookies, and attach only the surrogate. Google uses a narrow
-`generate_content` facade because its SDK constructor reads key environment
-variables even with an explicit key. Bedrock uses a Converse facade without
-loading boto3 or entering its authentication chain. Local and SLURM services
-keep their existing behavior.
-
-Automatic batch routing becomes realtime inference. Explicit native batch/file
-operations, account-status queries and management-key lookups raise the exported
-`BrokerModeUnsupportedError`. Broker configuration, grant/control-request failures
-and local route refusals use `BrokerError`; there is no fallback to direct keys.
-Existing provider error handling still applies to SDK inference failures.
-Broker-side policy may refuse
-additional requests, models or modalities. The Anthropic opt-in
-`LLM_UTILS_ALLOW_CLAUDE_API=1` remains required in both modes.
 
 ## License
 

@@ -68,11 +68,3 @@ class SpendCapExceededError(AccountFatalError):
 class RetentionPolicyError(PermissionError):
     """A call declared personal data on a route with no zero-retention
     guarantee; refused before sending."""
-
-
-class BrokerError(RuntimeError):
-    """Broker configuration, grant, or transport failed; never fall back to a key."""
-
-
-class BrokerModeUnsupportedError(BrokerError):
-    """This operation is unavailable through the credential broker."""

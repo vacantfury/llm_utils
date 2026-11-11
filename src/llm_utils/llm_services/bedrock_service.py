@@ -90,13 +90,6 @@ class BedrockService(BaseLLMService):
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
         self.expected_output_tokens = kwargs.get("expected_output_tokens")
-        from ..broker import consumer_route
-        self._broker_route = consumer_route("bedrock", "converse")
-        if self._broker_route is not None:
-            self._client = self._broker_route
-            self.use_batch_api = False
-            self.max_retries = 0
-            return
         self.region = (
             kwargs.get("aws_region")
             or os.environ.get("AWS_REGION")
