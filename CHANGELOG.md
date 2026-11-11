@@ -3,6 +3,18 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## v10.0.1 — 2026-11-11 (PATCH: OpenAI services build on openai 3.x)
+
+### Fixed
+
+- **`OpenAIService` and every OpenAI-compatible service build again in an
+  environment without `httpx`.** Since v9.3.0 the no-keep-alive client imported
+  `httpx` by name, but openai 3.x builds its client on `httpx2` and no longer
+  installs `httpx`, so a fresh install failed at construction with
+  `ModuleNotFoundError: No module named 'httpx'`. The limits now come from the
+  SDK's own default type, which works on openai 2.x and 3.x alike. Environments
+  that already had `httpx` were not affected.
+
 ## v10.0.0 — 2026-11-11 (MAJOR: usage callback, mainland endpoints opt-in, broker removed)
 
 ### Removed (breaking)
