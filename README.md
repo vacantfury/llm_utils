@@ -16,14 +16,14 @@ Pin a release tag as a git dependency (recommended — upgrades are a deliberate
 tag bump, so nothing changes under you mid-experiment):
 
 ```bash
-uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v10.0.1"
+uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v10.1.0"
 ```
 
 Heavy serving routes are extras; the core stays API-client-light:
 
 ```bash
-uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v10.0.1"    # torch + transformers
-uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v10.0.1"  # boto3
+uv add "llm_utils[local] @ git+https://github.com/vacantfury/llm_utils@v10.1.0"    # torch + transformers
+uv add "llm_utils[bedrock] @ git+https://github.com/vacantfury/llm_utils@v10.1.0"  # boto3
 ```
 
 **Stability contract:** the public seam is what `llm_utils/__init__.py` exports.

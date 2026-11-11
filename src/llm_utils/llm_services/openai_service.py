@@ -15,7 +15,7 @@ import io
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from openai import AsyncOpenAI, OpenAI
 
@@ -27,6 +27,7 @@ from ..usage_callback import STATUS_TIMEOUT
 from ..llm_model import LLMModel, ModelQuirk
 from .. import constants as _constants  # noqa: F401  (side effect: load_dotenv)
 from ..media_utils import encode_image_to_b64
+from .ordered_parts import OrderedParts, openai_content, tuple_view
 from .._logging import get_logger
 
 logger = get_logger(__name__)
@@ -172,13 +173,25 @@ class OpenAIService(BaseLLMService):
 
     @staticmethod
     def _format_conversation(
-        messages: List[Tuple[str, Optional[Any]]], system_message: Optional[str],
+        messages: List[Union[Tuple[str, Optional[Any]], OrderedParts]],
+        system_message: Optional[str],
     ) -> List[Dict[str, Any]]:
+        """One conversation as chat-completions messages (this service and the
+        OpenAI-compatible ones, which inherit it).
+
+        A ``(text, image_or_None)`` tuple renders as today: the text, then the
+        tuple's images in order. An ``OrderedParts`` renders its text and image
+        parts in exactly the order given (``ordered_parts.py``).
+        """
         openai_msgs: List[Dict[str, Any]] = []
         if system_message:
             openai_msgs.append({"role": "system", "content": system_message})
 
-        for text, image in messages:
+        for message in messages:
+            if isinstance(message, OrderedParts):
+                openai_msgs.append({"role": "user", "content": openai_content(message)})
+                continue
+            text, image = message
             if image is None:
                 openai_msgs.append({"role": "user", "content": text})
             else:
@@ -450,7 +463,7 @@ class OpenAIService(BaseLLMService):
         ]
 
         if self._route_to_native_batch(
-                conversations, max_tokens, self._output_hint(kwargs)):
+                tuple_view(conversations), max_tokens, self._output_hint(kwargs)):
             batch = self._submit_batch(prepared, temperature, max_tokens, extra)
             batch = self._poll_until_done(batch)
             results_map = self._collect_results(batch, is_test)

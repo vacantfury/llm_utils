@@ -14,6 +14,7 @@ from ..base_llm_service import BaseLLMService, make_mechanism_error
 from ..llm_model import LLMModel
 from ..constants import DEFAULT_LOCAL_BATCH_SIZE
 from .._logging import get_logger
+from .ordered_parts import OrderedParts
 
 try:
     from tqdm import tqdm
@@ -186,11 +187,17 @@ class LocalLMService(BaseLLMService):
         (``tokenizer.apply_chat_template``) so role markers match training;
         models without a template fall back to newline-joining. Images are
         not supported on the local text pipeline and are skipped with one
-        warning per service instance.
+        warning per service instance. An ``OrderedParts`` message is its text
+        parts in order, joined by a newline; its images are skipped the same way.
         """
         conv_id, messages = conv_data
         texts = []
-        for text, image in messages:
+        for message in messages:
+            if isinstance(message, OrderedParts):
+                text = "\n".join(message.texts)
+                image = message.images or None
+            else:
+                text, image = message
             if image is not None and not self._warned_images:
                 self._warned_images = True
                 logger.warning(
@@ -256,7 +263,7 @@ class LocalLMService(BaseLLMService):
 
         Args:
             conversations: List of (id, messages) tuples, where messages is
-                a list of (prompt, image) tuples.
+                a list of (prompt, image) tuples or ``OrderedParts``.
             **kwargs: Additional parameters (temperature, max_tokens, top_p,
                 batch_size, chat_template_kwargs). Explicit template options
                 raise on rendering failure instead of falling back to plain text.

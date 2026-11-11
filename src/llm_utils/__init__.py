@@ -90,6 +90,8 @@ from .llm_services.typesafe_service import (
     Evaluation, NoulAnswer, ChoiceAnswer, ScoreAnswer,
     noul_question, choice_question, score_question,
 )
+# An ordered user message (text and image parts in a fixed order, every route)
+from .llm_services import OrderedParts
 
 # Define what's exported
 __all__ = [
@@ -170,6 +172,9 @@ __all__ = [
     'choice_question',
     'score_question',
     'RetentionPolicyError',
+
+    # Ordered user message (message slot of a conversation)
+    'OrderedParts',
 
     # Version
     '__version__'

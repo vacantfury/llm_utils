@@ -51,7 +51,7 @@ registry.
 
 - Land from the checkout: `uv run -q --project ~/oikos/infrastructure/project_manager project_manager lane push
   --repo . -m "<message>" <files>`.
-- A consumer adds the dependency: `uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v10.0.1"`.
+- A consumer adds the dependency: `uv add "llm_utils @ git+https://github.com/vacantfury/llm_utils@v10.1.0"`.
 - A release bumps `version` in `pyproject.toml`, records the seam delta in `CHANGELOG.md` and tags `vX.Y.Z`.
 
 ## Verification
