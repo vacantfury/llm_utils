@@ -5,6 +5,12 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+### Added
+
+- **`INTERNVL3_5_8B`, `KIMI_VL_A3B_INSTRUCT`, `MIMO_VL_7B_RL_2508`** on
+  `SLURM_CLUSTER`: registry-only, additive. The same change as v8.4.0 on the
+  8.x maintenance line, forward-ported so the main line does not lose the rows.
+
 ## v9.3.0 — 2026-10-12 (MINOR: split-question judgments, Jev through OpenRouter)
 
 ### Added

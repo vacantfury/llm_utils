@@ -590,6 +590,27 @@ class LLMModel(Enum):
         # ceiling concern at our max_model_len default (20480).
         "Qwen/Qwen3-VL-8B-Instruct", Provider.SLURM_CLUSTER,
         family="qwen", alignment_tier="mid")
+    INTERNVL3_5_8B = ModelSpec(   # needs trust_remote_code (set in cluster config)
+        # Successor of INTERNVL3_8B: same family, size class and custom
+        # InternVLChatModel code, on a Qwen3-8B language tower (40960-token
+        # positions, config.json). No alignment label assigned.
+        "OpenGVLab/InternVL3_5-8B", Provider.SLURM_CLUSTER,
+        max_context_len=40_960, family="internvl")
+    KIMI_VL_A3B_INSTRUCT = ModelSpec(
+        # Moonshot's open-weight Kimi-VL-A3B-Instruct, a 16B mixture of experts
+        # with about 3B active (KimiVLForConditionalGeneration, 131072-token
+        # positions). Self-served: the weights run on the consumer's own GPUs,
+        # so no mainland endpoint is involved. Its processor needs
+        # trust_remote_code (set in cluster config). No alignment label assigned.
+        "moonshotai/Kimi-VL-A3B-Instruct", Provider.SLURM_CLUSTER,
+        max_context_len=131_072, family="kimi")
+    MIMO_VL_7B_RL_2508 = ModelSpec(
+        # Xiaomi's MiMo-VL-7B-RL-2508 (Qwen2_5_VLForConditionalGeneration,
+        # 128000-token positions). It reasons by default; "/no_think" as the
+        # last part of the user turn turns reasoning off (model card), which a
+        # consumer applies in its chat template. No alignment label assigned.
+        "XiaomiMiMo/MiMo-VL-7B-RL-2508", Provider.SLURM_CLUSTER,
+        max_context_len=128_000, family="mimo")
     GEMMA_3_12B_IT = ModelSpec(
         # SELF-SERVED TWIN of BEDROCK_GEMMA_3_12B — same open checkpoint, our
         # own vLLM instead of a managed host. It exists so a consumer can run
