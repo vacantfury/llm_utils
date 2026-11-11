@@ -3,13 +3,53 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
-## [Unreleased]
+## v10.0.0 — 2026-11-11 (MAJOR: usage callback, mainland endpoints opt-in, broker removed)
+
+### Removed (breaking)
+
+- **`llm_utils.call_ledger`**, the optional import of an outside call ledger,
+  and its `call_ledger:` config block (`attribution_ttl_s`). Usage now goes to
+  a callback the caller registers (Added, below), so this package imports no
+  consumer.
+- **The credential-broker transport:** `llm_utils.broker`, the
+  `LLM_UTILS_BROKER_URL` switch, `BrokerError`, `BrokerModeUnsupportedError`
+  and route availability's broker-mode answers. The broker service it talked
+  to was retired on 2026-09-26. Direct mode (keys from environment variables)
+  is unchanged.
+
+### Changed (breaking)
+
+- **Mainland-China endpoints are opt-in per process.** Every paid entry point
+  refuses a route whose `jurisdiction` is `"prc"` (the direct DeepSeek, Z.AI
+  and Moonshot endpoints) with `PRCEndpointNotAllowed` before it sends
+  anything, unless the process sets `LLM_UTILS_ALLOW_PRC_ENDPOINTS=1`. Setting
+  it declares that the process sends only public or synthetic data. Building a
+  service and balance lookups stay allowed. US routes to the same weights
+  (`LLMModel.us_route`, e.g. OpenRouter) are not affected.
 
 ### Added
 
+- **`set_usage_callback(fn)`** and `llm_utils.usage_callback`: one function per
+  process receives a fresh dict for each completed or failed call (launch point
+  and its source, caller file, model, purpose, tokens, cost, `is_test`, status,
+  error class). `set_usage_callback(None)` removes it. With no callback
+  registered nothing is built. A callback that raises is swallowed with one
+  warning per process.
+- **`PRCEndpointNotAllowed`**, `PRC_ENDPOINTS_ALLOW_ENV`, `is_prc_route()`,
+  `prc_endpoints_allowed()`.
 - **`INTERNVL3_5_8B`, `KIMI_VL_A3B_INSTRUCT`, `MIMO_VL_7B_RL_2508`** on
   `SLURM_CLUSTER`: registry-only, additive. The same change as v8.4.0 on the
   8.x maintenance line, forward-ported so the main line does not lose the rows.
+
+### Migration
+
+- A process that imported `llm_utils.call_ledger` registers its own recorder
+  with `set_usage_callback(...)`.
+- A launcher that calls DeepSeek, Z.AI or Moonshot directly with only public
+  or synthetic data sets `LLM_UTILS_ALLOW_PRC_ENDPOINTS=1`. A call that carries
+  anything about a person moves to the model's US route.
+- A process that set `LLM_UTILS_BROKER_URL` unsets it and passes provider keys
+  as plain environment variables.
 
 ## v9.3.0 — 2026-10-12 (MINOR: split-question judgments, Jev through OpenRouter)
 
