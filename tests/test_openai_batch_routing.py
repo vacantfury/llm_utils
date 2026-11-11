@@ -1,6 +1,6 @@
-"""Native-batch auto-routing: cost estimator, tri-state override,
-compatible-endpoint gating, cross-provider symmetry. Pure decision logic —
-no network."""
+"""Guards native-batch auto-routing, which every consumer reaches through the
+services it imports: cost estimator, tri-state override, compatible-endpoint
+gating, cross-provider symmetry. Pure decision logic — no network."""
 
 import pytest
 
@@ -108,7 +108,11 @@ class TestCompatibleEndpointGating:
             LLMModel.DEEPSEEK_V4_FLASH, **KEY, use_batch_api=True)
         assert svc._route_to_native_batch(_convs(1, 4), max_tokens=1) is False
 
-    def test_batch_trio_raises_on_compatible_endpoint(self):
+    def test_batch_trio_raises_on_compatible_endpoint(self, monkeypatch):
+        # DeepSeek's direct route is mainland-China, refused before any paid
+        # entry point unless the process opts in; this synthetic test opts in
+        # so it reaches the batch trio it checks.
+        monkeypatch.setenv("LLM_UTILS_ALLOW_PRC_ENDPOINTS", "1")
         svc = DeepSeekService(LLMModel.DEEPSEEK_V4_FLASH, **KEY)
         with pytest.raises(NotImplementedError):
             svc.submit_batch_chat([("a", [("hi", None)])])
