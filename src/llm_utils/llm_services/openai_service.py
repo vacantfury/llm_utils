@@ -54,11 +54,16 @@ def _no_keepalive_async_http_client():
     closed", surfacing as ``APIConnectionError``), and the SDK's retry resends
     a request that was already sent (t22, 2026-10-09). Timeout, redirects and
     the connection ceiling stay the SDK's own defaults.
+
+    The limits object is built from the SDK's own default's type: openai 2.x
+    builds its client on ``httpx``, openai 3.x on ``httpx2`` and no longer
+    installs ``httpx``, so importing either package by name breaks the other
+    line (a fresh install of v9.3.0 or v10.0.0 failed with
+    ``ModuleNotFoundError: httpx``, found 2026-11-11).
     """
-    import httpx as sdk_httpx
     from openai import DEFAULT_CONNECTION_LIMITS, DefaultAsyncHttpxClient
 
-    return DefaultAsyncHttpxClient(limits=sdk_httpx.Limits(
+    return DefaultAsyncHttpxClient(limits=type(DEFAULT_CONNECTION_LIMITS)(
         max_connections=DEFAULT_CONNECTION_LIMITS.max_connections,
         max_keepalive_connections=0))
 
