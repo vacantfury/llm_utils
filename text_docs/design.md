@@ -44,8 +44,22 @@ Tag bumps stay per-consumer and deliberate.
 
 ## Dependency protocol (the standard consumers follow)
 
-Canonical statement lives in CLAUDE.md (public seam, pinned uv git dep by tag,
-semver, extras, no vendoring, blind-mirror vendoring exception). Design rationale:
+This section is the canonical statement of the protocol (ecosystem charter §3.7).
+AGENTS.md keeps only what binds work in this repo: semver, extras, and the
+blind-mirror line.
+
+- Consumers declare a **pinned uv git dependency by tag** and import only the public
+  seam (the package `__init__` exports). The install lines are in README.md.
+- Upgrades are deliberate: the consumer bumps the tag when it chooses. Never track a
+  branch; never vendor a copy back into a consumer.
+- **Anonymous paper mirrors never carry this repo as a git dep:** the dep URL and
+  `uv.lock` carry the owner's GitHub handle. Blind mirrors vendor the package source
+  (operative rule: the global research-workflow skill, S12 pre-submit checklist).
+- **Shared-private repos may carry this dep:** the package is public, so outside
+  collaborators install the same pinned git dep as any consumer. Only anonymous paper
+  mirrors keep the vendoring rule.
+
+Design rationale:
 
 - **Pin by tag, not branch:** consumers must never break mid-experiment because the base
   moved; an upgrade is a deliberate one-line bump the consumer makes when ready. This is
@@ -68,6 +82,9 @@ semver, extras, no vendoring, blind-mirror vendoring exception). Design rational
 
 ## Release discipline
 
+- A release bumps `version` in `pyproject.toml` (with `uv.lock`), records the public
+  seam's delta in `CHANGELOG.md`, points the README install lines at the new tag, and
+  tags `vX.Y.Z`.
 - Tag every release `vX.Y.Z`; `CHANGELOG.md` records every release from v2.2.0 on.
 - `__version__` in `src/llm_utils/__init__.py` matches `pyproject.toml` version.
 - `httpx` note: migrated to `httpx2` at v2.2.0 (openai floor raised to >=2.47, the
@@ -83,3 +100,11 @@ generic factory mechanics worth keeping in the seam, while WHERE defaults live
 (YAML schema, file layout) is domain meaning that stays consumer-side. With no
 loader registered the factory builds services from caller kwargs alone. Hosts wire
 their YAML back in with one startup line.
+
+## Cluster seam
+
+`SlurmClusterService` consumes the device layer's SLURM serving lifecycle through a
+duck-typed contract, `acquire_endpoint(model_id) -> base_url` /
+`release_endpoint(model_id, endpoint)`, injected via
+`LLMServiceFactory.set_server_manager()`. The package never imports the device layer;
+cluster topology and fleet knowledge stay there.
