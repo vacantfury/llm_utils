@@ -1,6 +1,35 @@
-# The data-lifecycle declaration (project_manager standard data-lifecycle, schema 2). Explicit and empty:
-# no store is declared yet, so this repository's data reads unknown, which is kept and never removed.
+# The data-lifecycle declaration (project_manager standard data-lifecycle, schema 2).
 schema_version: 2
 repo: llm_utils
-stores: []
+stores:
+  # Private notes that must never be public (AGENTS.md, Layout): site-specific cluster and account facts and
+  # consumer records, written by this repo's sessions. Gitignored, so this folder is the only copy.
+  - id: private-notes
+    storage: {version: 1, type: folder, root: checkout, path: text_docs/private}
+    placement: {version: 1, residency: [project], scope: one, sessions_write: true}
+    lifecycle:
+      version: 1
+      kind: records
+      keep: unique
+      retention: {forever: true}
+      operations: {compress: owner-press, retire: owner-press, archive: owner-press, move: owner-press}
+      size_target:
+        bytes: 1048576
+        basis: >-
+          20 KB on 2026-11-11 (two Markdown files). 1 MiB is years of notes at that pace; a reading over it is a
+          look at what grew, never a removal.
+  # One wheel (llm_utils 2.3.0, built 2026-07-23). No tag or commit names its exact source, so it counts as
+  # unique and stays until the owner's press.
+  - id: old-build
+    storage: {version: 1, type: folder, root: checkout, path: dist}
+    placement: {version: 1, residency: [project], scope: one, sessions_write: false}
+    lifecycle:
+      version: 1
+      kind: builds
+      keep: unique
+      retention: {forever: true}
+      operations: {compress: owner-press, retire: owner-press, archive: owner-press, move: owner-press}
+      size_target:
+        bytes: 131072
+        basis: 64 KB on 2026-11-11 (one wheel); nothing writes here any more.
 producers: []
