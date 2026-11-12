@@ -175,14 +175,23 @@ class ClaudeService(BaseLLMService):
         max_tokens: int,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        # Extended thinking set through api_params or extra, e.g.
+        # {"thinking": {"type": "enabled", "budget_tokens": 1024}}. Anthropic
+        # requires max_tokens above the thinking budget and accepts no
+        # temperature but its default (1) while thinking is on, so the budget
+        # is added on top of the caller's visible-text max_tokens and no
+        # temperature is sent.
+        thinking = {**self.api_params, **(extra or {})}.get("thinking") or {}
+        thinking_on = thinking.get("type") in ("enabled", "adaptive")
+        budget = thinking.get("budget_tokens") if thinking.get("type") == "enabled" else 0
         params: Dict[str, Any] = {
             "model": self.model.model_id,
-            "max_tokens": self._output_budget(max_tokens),
+            "max_tokens": self._output_budget(max_tokens + (budget or 0)),
             "messages": messages,
         }
         # Temperature is gated by the shared quirk rule (Opus 4.7+ rejects
         # it with a 400). See BaseLLMService._accepts_temperature.
-        if self._accepts_temperature():
+        if self._accepts_temperature() and not thinking_on:
             params["temperature"] = temperature
         if system_message:
             params["system"] = system_message

@@ -3,6 +3,22 @@
 All notable changes to the public seam are recorded here. Versioning follows
 semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
+## [Unreleased]
+
+**Added** (forward-ported from v8.6.0 on the 8.x maintenance line):
+
+- **`GoogleService` takes `api_params`**, merged verbatim into every
+  generation config, realtime and native batch; a Gemini reasoning level is
+  `api_params={"thinking_config": {"thinking_budget": N}}` (0 off, -1
+  dynamic), and a set budget is reserved on top of the caller's `max_tokens`.
+- **Claude extended thinking through `api_params`** (or a call's `extra`):
+  `{"thinking": {"type": "enabled", "budget_tokens": N}}` adds the budget on
+  top of `max_tokens` and sends no temperature, as Anthropic requires.
+- **Registry rows** `QWEN3_VL_8B_THINKING` and `KIMI_VL_A3B_THINKING_2506` on
+  `SLURM_CLUSTER`.
+
+With `api_params` unset every Google and Claude request is built as before.
+
 ## v10.1.0 — 2026-11-11 (MINOR: ordered message parts, additive)
 
 MINOR: new capability, additive. The same change as v8.5.0 on the 8.x maintenance line, forward-ported.
