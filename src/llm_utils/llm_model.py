@@ -574,6 +574,21 @@ class LLMModel(Enum):
         # consumer applies in its chat template. No alignment label assigned.
         "XiaomiMiMo/MiMo-VL-7B-RL-2508", Provider.SLURM_CLUSTER,
         max_context_len=128_000, family="mimo")
+    QWEN3_VL_8B_THINKING = ModelSpec(
+        # The reasoning edition of QWEN3_VL_8B_INSTRUCT: same architecture
+        # (Qwen3VLForConditionalGeneration) and size, post-trained to reason
+        # before it answers (262144-token positions, config.json). It always
+        # reasons; the reasoning ends at "</think>". No alignment label assigned.
+        "Qwen/Qwen3-VL-8B-Thinking", Provider.SLURM_CLUSTER,
+        family="qwen")
+    KIMI_VL_A3B_THINKING_2506 = ModelSpec(
+        # The reasoning edition of KIMI_VL_A3B_INSTRUCT
+        # (KimiVLForConditionalGeneration, 131072-token positions). It always
+        # reasons, inside its own think markers (model card). Self-served on
+        # the consumer's own GPUs, so no mainland endpoint is involved. Its
+        # processor needs trust_remote_code (set in cluster config).
+        "moonshotai/Kimi-VL-A3B-Thinking-2506", Provider.SLURM_CLUSTER,
+        max_context_len=131_072, family="kimi")
     GEMMA_3_12B_IT = ModelSpec(
         # SELF-SERVED TWIN of BEDROCK_GEMMA_3_12B — same open checkpoint, our
         # own vLLM instead of a managed host. It exists so a consumer can run

@@ -82,6 +82,10 @@ class GoogleService(BaseLLMService):
         self.temperature = kwargs.get("temperature", 0.0)
         self.max_tokens = kwargs.get("max_tokens", 4096)
         self.top_p = kwargs.get("top_p", 1.0)
+        # Extra generation-config entries merged verbatim into every request
+        # (parity with the OpenAI and Claude api_params seam), e.g.
+        # {"thinking_config": {"thinking_budget": 1024}} to set the reasoning level.
+        self.api_params: Dict[str, Any] = kwargs.get("api_params") or {}
 
         if self._broker_route is not None:
             try:
@@ -104,9 +108,20 @@ class GoogleService(BaseLLMService):
     def _output_budget(self, max_tokens: int) -> int:
         """The effective max_output_tokens: thinking models get headroom so
         thought tokens can't starve the caller's visible-text budget."""
-        if self.model.has_quirk(ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET):
-            return max_tokens + _THINKING_HEADROOM
-        return max_tokens
+        return max_tokens + self._thinking_headroom()
+
+    def _thinking_headroom(self) -> int:
+        """Output tokens reserved for thought. A thinking budget set through
+        api_params reserves exactly that budget (0 turns thinking off, -1 is
+        Gemini's dynamic thinking); otherwise a thinking model gets the
+        default headroom and any other model none."""
+        thinking = self.api_params.get("thinking_config") or {}
+        budget = thinking.get("thinking_budget")
+        if isinstance(budget, int) and budget >= 0:
+            return budget
+        if budget == -1 or self.model.has_quirk(ModelQuirk.THINKING_SHARES_OUTPUT_BUDGET):
+            return _THINKING_HEADROOM
+        return 0
 
     # ------------------------------------------------------------------
     # Message formatting
@@ -169,6 +184,8 @@ class GoogleService(BaseLLMService):
                 config["top_p"] = self.top_p
         if system_message:
             config["system_instruction"] = system_message
+        if self.api_params:
+            config.update(self.api_params)
         return config
 
     # ------------------------------------------------------------------

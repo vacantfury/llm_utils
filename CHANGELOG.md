@@ -5,6 +5,37 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v8.6.0 — 2026-11-12 (MINOR: reasoning level through api_params, two registry rows; additive)
+
+MINOR: new capability, additive, on the 8.x maintenance line.
+
+**Added:**
+
+- **`GoogleService` takes `api_params`**, the extra-request seam the OpenAI
+  and Claude services already had: its entries are merged verbatim into every
+  generation config, realtime and native batch. The reasoning level of a
+  Gemini model is set as `api_params={"thinking_config": {"thinking_budget":
+  N}}` (0 turns thinking off, -1 is Gemini's dynamic thinking). A set budget
+  is reserved on top of the caller's `max_tokens`, so thought cannot starve
+  the visible answer; with no budget set, thinking models keep the default
+  headroom and other models none, as before.
+- **Claude extended thinking through `api_params`** (or a call's `extra`):
+  `{"thinking": {"type": "enabled", "budget_tokens": N}}`. Anthropic requires
+  `max_tokens` above the budget and accepts no temperature but its default
+  while thinking is on, so the budget is added on top of the caller's
+  `max_tokens` and no temperature is sent. The answer text is the text blocks
+  only, as before (thinking blocks are skipped).
+- **Registry rows** `QWEN3_VL_8B_THINKING` (`Qwen/Qwen3-VL-8B-Thinking`) and
+  `KIMI_VL_A3B_THINKING_2506` (`moonshotai/Kimi-VL-A3B-Thinking-2506`) on
+  `SLURM_CLUSTER`, the reasoning editions of `QWEN3_VL_8B_INSTRUCT` and
+  `KIMI_VL_A3B_INSTRUCT`; context ceilings read from each checkpoint's
+  config.json; no alignment labels assigned.
+
+**Unchanged:** with `api_params` unset, every Google and Claude request is
+built exactly as in v8.5.0 (read back on gemini-2.5-flash, gemini-2.5-flash-lite
+and claude-sonnet-4-6). OpenAI reasoning effort already passes through
+`api_params` (`{"reasoning_effort": ...}`).
+
 ## v8.5.0 — 2026-11-11 (MINOR: ordered message parts, additive)
 
 MINOR: new capability, additive, on the 8.x maintenance line.
