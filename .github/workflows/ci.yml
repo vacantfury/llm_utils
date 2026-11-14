@@ -1,12 +1,13 @@
 name: keyless tests
 # This public repository cannot call the estate's private shared CI, so it follows the shared CI's test rule here:
 # a push to main runs only the tests its change reaches since the push before it (github.event.before, read with no
-# run history; pytest-impacted, the tool the shared CI uses); a tag, a manual run, a new branch or a forced history (no
-# usable before) runs the whole suite. No schedule: no scheduled event runs tests (owner order 2026-11-13).
+# run history; pytest-impacted, the tool the shared CI uses). Only a manual run runs the whole suite: a push with no
+# usable before (a new branch, a forced history) runs no test, a failed selection fails the run and runs none, and
+# no tag starts a run (owner order 2026-11-13: no push ever runs every test). No schedule: no scheduled event runs
+# tests (owner order 2026-11-13).
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 # The job runs the repository's code and its PyPI dependencies, so its token only reads, whatever the repository's
 # default token permissions are (Hephaestus's builder review 6, 2026-10-29).
@@ -42,10 +43,14 @@ jobs:
       - name: Tests the change reaches
         run: |
           base="${SELECTION_BASE:-}"
-          if [ -z "$base" ]; then
-            echo "the whole suite runs ($GITHUB_EVENT_NAME, no base)"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "the whole suite runs (a manual run)"
             uv run pytest -q
             exit $?
+          fi
+          if [ -z "$base" ]; then
+            echo "no test runs: this push has nothing to compare against"
+            exit 0
           fi
           set +e
           uv run --with pytest-impacted==0.36.0 pytest -q --impacted --impacted-module=src/llm_utils \
@@ -55,5 +60,5 @@ jobs:
           case $code in
             0|1) echo "tests the change since ${base:0:12} reaches"; exit $code ;;
             5) echo "no test reached by the change since ${base:0:12}"; exit 0 ;;
-            *) echo "selection failed (exit $code); the whole suite runs"; uv run pytest -q ;;
+            *) echo "selection failed (exit $code); no test ran"; exit $code ;;
           esac
