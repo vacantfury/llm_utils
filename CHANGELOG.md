@@ -5,6 +5,13 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+**Added** (forward-ported from v8.7.0 on the 8.x maintenance line):
+
+- **`META_LLAMA_3_70B_INSTRUCT`** on `SLURM_CLUSTER`
+  (`meta-llama/Meta-Llama-3-70B-Instruct`, `max_context_len` 8192 from its
+  config.json, family `llama`): the open judge OR-Bench's own response checker
+  names. Registry-only.
+
 **Added** (forward-ported from v8.6.0 on the 8.x maintenance line):
 
 - **`GoogleService` takes `api_params`**, merged verbatim into every
