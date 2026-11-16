@@ -689,6 +689,13 @@ class LLMModel(Enum):
     LLAMA_3_3_70B_INSTRUCT = ModelSpec(
         "meta-llama/Llama-3.3-70B-Instruct", Provider.SLURM_CLUSTER,
         max_context_len=131_072)               # Llama-3.3 long-context
+    META_LLAMA_3_70B_INSTRUCT = ModelSpec(
+        # Meta-Llama-3-70B-Instruct (April 2024), the open judge OR-Bench's own
+        # response checker names (its `llama3` option). Self-served. Positions
+        # stop at 8192 (config.json max_position_embeddings), so a caller's
+        # prompt plus max_tokens must fit in 8192.
+        "meta-llama/Meta-Llama-3-70B-Instruct", Provider.SLURM_CLUSTER,
+        max_context_len=8_192, family="llama")
 
     # Open general-LLM RUBRIC judges (added 2026-07-13) — capable general models
     # applying the HarmBench classifier rubric (faithful rule-appliers, vs. the

@@ -5,6 +5,18 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v8.7.0 — 2026-11-16 (MINOR: one registry row; additive)
+
+MINOR: new capability, additive, on the 8.x maintenance line.
+
+**Added:**
+
+- **`META_LLAMA_3_70B_INSTRUCT`** on `SLURM_CLUSTER`
+  (`meta-llama/Meta-Llama-3-70B-Instruct`, `max_context_len` 8192 from its
+  config.json, family `llama`): the open judge OR-Bench's own response checker
+  names, for a consumer on v8 that serves it on its own GPUs as an evaluation
+  judge. Registry-only: no service, request or existing row changes.
+
 ## v8.6.0 — 2026-11-12 (MINOR: reasoning level through api_params, two registry rows; additive)
 
 MINOR: new capability, additive, on the 8.x maintenance line.
