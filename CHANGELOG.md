@@ -5,6 +5,20 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v8.8.0 — 2026-11-17 (MINOR: nine registry rows; additive)
+
+MINOR: new capability, additive, on the 8.x maintenance line.
+
+**Added:**
+
+- **Nine open vision-language rows** on `SLURM_CLUSTER`: `QWEN3_VL_2B_INSTRUCT`, `QWEN3_VL_4B_INSTRUCT`, `QWEN3_VL_32B_INSTRUCT`,
+  `QWEN3_5_9B`, `QWEN3_8_27B`, `GEMMA_4_31B_IT`, `PHI_4_REASONING_VISION_15B`,
+  `GLM_4_6V_FLASH` and `MUSE_GLIMMER_30B`
+  (`max_context_len` from each checkpoint's config.json positions; families `qwen`,
+  `gemma`, `phi`, `glm`, `muse`), for a consumer on v8 that serves them on its own
+  GPUs. Each row's comment records how the checkpoint's reasoning is switched.
+  Registry-only: no service, request or existing row changes.
+
 ## v8.7.0 — 2026-11-16 (MINOR: one registry row; additive)
 
 MINOR: new capability, additive, on the 8.x maintenance line.
