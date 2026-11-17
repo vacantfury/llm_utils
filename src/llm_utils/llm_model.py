@@ -643,6 +643,20 @@ class LLMModel(Enum):
         # of the system prompt, "Reasoning strength: <value>" (model card).
         "meta-models/Muse-Glimmer-30B", Provider.SLURM_CLUSTER,
         max_context_len=131_072, family="muse")
+    # VLGuard's LLaVA-1.5-7B Clean and Mixed checkpoints (Zong et al., ICML 2024,
+    # arXiv 2402.02207; sources ys-zong/llava-v1.5-7b-Clean and -Mixed, in the
+    # original LLaVA format). No hub repo holds them in the llava-hf layout a
+    # vLLM server loads, so a consumer converts them itself and exposes each
+    # converted directory as an offline Hugging Face cache entry under this
+    # bare name (hub/models--<name>/snapshots/<rev>, served with
+    # HF_HUB_OFFLINE=1). The id is that cache name, not a hub repo: an online
+    # lookup fails loudly. Same architecture and 4096 positions as LLAVA_7B.
+    LLAVA_V1_5_7B_VLGUARD_CLEAN = ModelSpec(
+        "llava_v1_5_7b_vlguard_clean", Provider.SLURM_CLUSTER,
+        max_context_len=4_096)
+    LLAVA_V1_5_7B_VLGUARD_MIXED = ModelSpec(
+        "llava_v1_5_7b_vlguard_mixed", Provider.SLURM_CLUSTER,
+        max_context_len=4_096)
     GEMMA_3_12B_IT = ModelSpec(
         # SELF-SERVED TWIN of BEDROCK_GEMMA_3_12B — same open checkpoint, our
         # own vLLM instead of a managed host. It exists so a consumer can run

@@ -5,6 +5,18 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+## v8.9.0 — 2026-11-17 (MINOR: two registry rows; additive)
+
+MINOR: new capability, additive, on the 8.x maintenance line.
+
+**Added:**
+
+- **Two rows** on `SLURM_CLUSTER`: `LLAVA_V1_5_7B_VLGUARD_CLEAN` and `LLAVA_V1_5_7B_VLGUARD_MIXED`,
+  VLGuard's LLaVA-1.5-7B checkpoints (Zong et al., ICML 2024) as a consumer converts them to the
+  llava-hf layout and serves them from an offline Hugging Face cache entry of the same bare name
+  (`max_context_len` 4096, as `LLAVA_7B`). The ids are local cache names, not hub repos.
+  Registry-only: no service, request or existing row changes.
+
 ## v8.8.0 — 2026-11-17 (MINOR: nine registry rows; additive)
 
 MINOR: new capability, additive, on the 8.x maintenance line.
