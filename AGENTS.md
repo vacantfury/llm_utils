@@ -36,7 +36,8 @@ device-management layer). History: `docs/decisions/`.
   cluster seam contract.
 - `text_docs/private/`: gitignored; site-specific cluster/account facts and consumer records.
 - `CHANGELOG.md`: the public seam's changes per release. `project_manager.yaml`, `.github/workflows/ci.yml`: build
-  declaration and CI. `stores.yaml`: data declaration. `docs/decisions/`: history.
+  declaration and CI. `stores.yaml`: data declaration; `scripts/superseded_builds.py` is its read-only event reader
+  for `dist/` (one JSON line per build a newer release tag supersedes). `docs/decisions/`: history.
 
 ## Tasks
 
