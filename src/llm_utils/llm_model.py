@@ -626,6 +626,60 @@ class LLMModel(Enum):
         # processor needs trust_remote_code (set in cluster config).
         "moonshotai/Kimi-VL-A3B-Thinking-2506", Provider.SLURM_CLUSTER,
         max_context_len=131_072, family="kimi")
+    # Open vision-language models added 2026-11-17 for a consumer on v8 that
+    # serves them on its own GPUs (a size ladder of one 2025 family, and the
+    # 2026 generation of general models that take images natively). Context
+    # ceilings are each checkpoint's config.json positions. No alignment label
+    # assigned to any of them.
+    QWEN3_VL_2B_INSTRUCT = ModelSpec(
+        # Size ladder of QWEN3_VL_8B_INSTRUCT (Qwen3VLForConditionalGeneration).
+        "Qwen/Qwen3-VL-2B-Instruct", Provider.SLURM_CLUSTER,
+        max_context_len=262_144, family="qwen")
+    QWEN3_VL_4B_INSTRUCT = ModelSpec(
+        "Qwen/Qwen3-VL-4B-Instruct", Provider.SLURM_CLUSTER,
+        max_context_len=262_144, family="qwen")
+    QWEN3_VL_32B_INSTRUCT = ModelSpec(
+        "Qwen/Qwen3-VL-32B-Instruct", Provider.SLURM_CLUSTER,
+        max_context_len=262_144, family="qwen")
+    QWEN3_5_9B = ModelSpec(
+        # Qwen3.5-9B (2026-02, Qwen3_5ForConditionalGeneration): a general model
+        # that takes images natively. It reasons by default, inside
+        # "<think>...</think>"; the chat template turns reasoning off with
+        # chat_template_kwargs {"enable_thinking": false} (model card).
+        "Qwen/Qwen3.5-9B", Provider.SLURM_CLUSTER,
+        max_context_len=262_144, family="qwen")
+    QWEN3_8_27B = ModelSpec(
+        # Qwen3.8-27B (2026-08, Qwen3_5ForConditionalGeneration). Reasons by
+        # default, switched as QWEN3_5_9B; also takes a reasoning_effort level.
+        "Qwen/Qwen3.8-27B", Provider.SLURM_CLUSTER,
+        max_context_len=262_144, family="qwen")
+    GEMMA_4_31B_IT = ModelSpec(
+        # Gemma 4 31B (2026-03, Gemma4ForConditionalGeneration), ungated.
+        # Reasoning is off unless the chat template gets
+        # chat_template_kwargs {"enable_thinking": true} (model card).
+        "google/gemma-4-31B-it", Provider.SLURM_CLUSTER,
+        max_context_len=262_144, family="gemma")
+    PHI_4_REASONING_VISION_15B = ModelSpec(
+        # Phi-4-reasoning-vision-15B (2026-01, Phi4ForCausalLMV, custom code in
+        # the repo). It picks reasoning or a direct answer itself; appending
+        # "<think>" or "<nothink>" to the generation prompt forces one (model
+        # card), which a consumer applies in its chat template. The card gives
+        # a 16384-token context; positions are 32768 (config.json).
+        "microsoft/Phi-4-reasoning-vision-15B", Provider.SLURM_CLUSTER,
+        max_context_len=32_768, family="phi")
+    GLM_4_6V_FLASH = ModelSpec(
+        # GLM-4.6V-Flash (2025-12, Glm4vForConditionalGeneration, about 10B).
+        # Open weights served on the consumer's own GPUs, so no mainland
+        # endpoint is involved. It reasons by default; chat_template_kwargs
+        # {"enable_thinking": false} turns reasoning off (chat template).
+        "zai-org/GLM-4.6V-Flash", Provider.SLURM_CLUSTER,
+        max_context_len=131_072, family="glm")
+    MUSE_GLIMMER_30B = ModelSpec(
+        # Muse Glimmer 30B (2026-08, MuseGlimmerForConditionalGeneration),
+        # published by Meta's verified account. Reasoning strength is a line
+        # of the system prompt, "Reasoning strength: <value>" (model card).
+        "meta-models/Muse-Glimmer-30B", Provider.SLURM_CLUSTER,
+        max_context_len=131_072, family="muse")
     GEMMA_3_12B_IT = ModelSpec(
         # SELF-SERVED TWIN of BEDROCK_GEMMA_3_12B — same open checkpoint, our
         # own vLLM instead of a managed host. It exists so a consumer can run
