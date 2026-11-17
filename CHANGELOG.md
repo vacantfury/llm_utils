@@ -5,6 +5,9 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+- Forward-port from v8.9.0 on the 8.x maintenance line. **Two rows** on `SLURM_CLUSTER`: `LLAVA_V1_5_7B_VLGUARD_CLEAN` and
+  `LLAVA_V1_5_7B_VLGUARD_MIXED`, VLGuard's LLaVA-1.5-7B checkpoints as a consumer converts them to the llava-hf layout and
+  serves them from an offline Hugging Face cache entry of the same bare name. Registry-only, additive.
 - Forward-port from v8.8.0 on the 8.x maintenance line. **Nine open vision-language rows** on `SLURM_CLUSTER`: `QWEN3_VL_2B_INSTRUCT`, `QWEN3_VL_4B_INSTRUCT`, `QWEN3_VL_32B_INSTRUCT`,
   `QWEN3_5_9B`, `QWEN3_8_27B`, `GEMMA_4_31B_IT`, `PHI_4_REASONING_VISION_15B`,
   `GLM_4_6V_FLASH` and `MUSE_GLIMMER_30B`
