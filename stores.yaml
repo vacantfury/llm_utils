@@ -42,6 +42,14 @@ stores:
           item); its time is the creation time of the earliest vX.Y.Z tag newer than its version. Read-only; exits 1
           when dist/ or the tags cannot be read (project_manager data-lifecycle standard df0a5294, Events and
           archive).
+      removal:
+        argv: [../datastore/.venv/bin/python, -I, scripts/archive_removal.py, old-build]
+        basis: >-
+          A build file may go while its event still names it (an llm_utils wheel or sdist, a regular file directly
+          under dist/, that a newer vX.Y.Z tag supersedes, read again when asked); a build no newer tag supersedes
+          stays as still_read, anything else as other. Nothing reads dist/ and consumers install from the tags. Runs
+          on datastore's own environment (datastore.archive_removal.serve), so this public package declares no
+          dependency on it (scripts/archive_removal.py).
       archive_after:
         duration: P30D
         basis: >-
