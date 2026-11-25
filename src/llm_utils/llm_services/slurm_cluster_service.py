@@ -23,7 +23,12 @@ logger = get_logger(__name__)
 
 
 class SlurmClusterService(BaseLLMService):
-    """Service for models served on a SLURM cluster via a vLLM HTTP server."""
+    """Service for models served on a SLURM cluster via a vLLM HTTP server.
+
+    Reads have no default timeout: queueing, prefill and decoding can exceed
+    a fixed deadline. Set ``api_params={"timeout": ...}`` at construction or
+    on a batch call to override this with an SDK request timeout.
+    """
 
     def __init__(self, model: LLMModel, **kwargs):
         # Duck-typed endpoint-provider contract — any object exposing
@@ -63,7 +68,7 @@ class SlurmClusterService(BaseLLMService):
             api_key="unused",
             http_client=httpx2.AsyncClient(
                 trust_env=False,
-                timeout=httpx2.Timeout(600.0, connect=60.0),
+                timeout=httpx2.Timeout(600.0, connect=60.0, read=None),
             ),
         )
 
