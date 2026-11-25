@@ -238,6 +238,9 @@ class LLMModel(Enum):
     # apply to the ENTIRE request, not just the excess input tokens.
     # Luna: cached input $0.01; long context $0.20/$0.75 (cached $0.02).
     GPT_6_LUNA   = ModelSpec("gpt-6-luna",     Provider.OPENAI, 0.10,  0.50,  quirks=_GPT5_QUIRKS)
+    # Terra 6.1: standard $1/$5, checked 2026-11-24 against the pricing page above.
+    # Cached input $0.05; long context $2/$7.50 (cached $0.10).
+    GPT_6_1_TERRA = ModelSpec("gpt-6.1-terra", Provider.OPENAI, 1.00,  5.00,  quirks=_GPT5_QUIRKS)
     # Sol: cached input $0.20; long context $4/$15 (cached $0.40).
     GPT_6_SOL    = ModelSpec("gpt-6-sol",      Provider.OPENAI, 2.00,  10.00, quirks=_GPT5_QUIRKS)
     # Sol 6.1: cached input $0.10; long context $4/$15 (cached $0.20).
