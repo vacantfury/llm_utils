@@ -1,4 +1,4 @@
-"""Guards consumer model lookup, realtime billing and installed-version provenance.
+"""Guards consumer model lookup, realtime billing, every metered row's prices and installed-version provenance.
 
 The Bedrock temperature-quirk regression remains covered; provider calls are faked."""
 
@@ -8,10 +8,38 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from llm_utils import LLMModel
+from llm_utils import LLMModel, Provider
 from llm_utils.base_llm_service import BaseLLMService
 from llm_utils.llm_services import OpenAIService
 
+
+# Serving routes we run ourselves: zero price is the convention there.
+_SELF_SERVED = {Provider.LOCAL, Provider.SLURM_CLUSTER}
+
+
+def test_every_row_has_id_provider_prices():
+    for m in LLMModel:
+        assert isinstance(m.model_id, str) and m.model_id, m.name
+        assert isinstance(m.provider, Provider), m.name
+        assert m.input_price is not None and m.input_price >= 0, m.name
+        assert m.output_price is not None and m.output_price >= 0, m.name
+
+
+def test_metered_api_rows_are_priced():
+    """Metered API providers must carry real list prices: a zero price makes
+    cost recording silently log $0. Bedrock is exempted row-by-row: the
+    open-weight serverless rows deliberately carry 0 until verified (see
+    registry comments)."""
+    for m in LLMModel:
+        if m.provider in _SELF_SERVED or m.provider is Provider.BEDROCK:
+            continue
+        if m is LLMModel.GLM_4_7_FLASH:  # provider's free tier: genuine $0
+            continue
+        if m.family == "jev":            # TypeSafe bills input only; output is free
+            assert m.input_price > 0
+            continue
+        assert m.input_price > 0 and m.output_price > 0, (
+            f"{m.name}: zero price on metered provider {m.provider.value}")
 
 def test_from_string_resolves_unique_ids_and_rejects_ambiguous():
     """Every uniquely-registered id must resolve; an id shared across serving
