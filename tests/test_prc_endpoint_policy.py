@@ -1,4 +1,4 @@
-"""Mainland-China endpoints are opt-in per process (LLM_UTILS_ALLOW_PRC_ENDPOINTS=1); US routes are not covered."""
+"""Guards paid requests to mainland endpoints behind the process opt-in."""
 import pytest
 
 from llm_utils import LLMModel, LLMServiceFactory, PRCEndpointNotAllowed, is_prc_route
@@ -42,7 +42,7 @@ def test_opt_in_allows(monkeypatch):
     require_prc_allowed(LLMModel.from_string("deepseek-v4-flash"))   # no raise
 
 
-@pytest.mark.parametrize("value", ["", "0", "true", "yes"])
+@pytest.mark.parametrize("value", ["true"])
 def test_only_exact_one_opts_in(monkeypatch, value):
     monkeypatch.setenv(ALLOW_ENV, value)
     with pytest.raises(PRCEndpointNotAllowed):

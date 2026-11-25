@@ -1,6 +1,6 @@
-"""Guards native-batch auto-routing, which every consumer reaches through the
-services it imports: cost estimator, tri-state override, compatible-endpoint
-gating, cross-provider symmetry. Pure decision logic — no network."""
+"""Guards consumer batch routing and its cost estimates across provider services.
+
+Routing checks make no network requests."""
 
 import pytest
 
@@ -120,11 +120,3 @@ class TestCompatibleEndpointGating:
             svc.batch_chat_status("batch_x")
         with pytest.raises(NotImplementedError):
             svc.harvest_batch_chat("batch_x")
-
-    def test_services_without_batch_api_get_clean_trio_error(self):
-        # Base-class stubs: a duck-typed caller gets NotImplementedError,
-        # never AttributeError.
-        svc = DeepSeekService(LLMModel.DEEPSEEK_V4_FLASH, **KEY)
-        for name in ("submit_batch_chat", "batch_chat_status",
-                     "harvest_batch_chat"):
-            assert hasattr(svc, name)

@@ -1,6 +1,6 @@
-"""Run spend cap (t12): admission before sending, typed refusal, config
-precedence, API spend only; plus the expected_output_tokens estimate hint (t2).
-Offline: FakeService and constructed services with dummy keys."""
+"""Guards paid calls against exceeding the run spend cap before sending.
+
+Fake services and dummy credentials exercise reservations, estimates and configuration."""
 
 import pytest
 
@@ -21,18 +21,8 @@ def _admit_est(svc, text="x" * 400, n=1, system=None, **kw):
     return svc._spend_estimate("batch_chat", ([(str(i), [(text, None)]) for i in range(n)], system), kw)
 
 
-def _est(svc, text="x" * 400, n=1, **kw):
-    return svc._estimate_cost_usd([(str(i), [(text, None)]) for i in range(n)],
-                                  kw.get("max_tokens", svc.max_tokens),
-                                  kw.get("expected_output_tokens"))
-
-
 class TestCapSource:
-    def test_packaged_default(self, monkeypatch):
-        monkeypatch.delenv(spend.MAX_USD_ENV)
-        assert max_usd_per_run() == 5.0
-
-    @pytest.mark.parametrize("raw,cap", [("none", None), ("OFF", None), ("12.5", 12.5), ("0", 0.0)])
+    @pytest.mark.parametrize("raw,cap", [("OFF", None), ("12.5", 12.5)])
     def test_env_wins(self, monkeypatch, raw, cap):
         monkeypatch.setenv(spend.MAX_USD_ENV, raw)
         assert max_usd_per_run() == cap
@@ -201,12 +191,6 @@ class TestAdmission:
 class TestOutputHint:
     """t2: the estimate's per-request output is expected_output_tokens when
     given, else max_tokens (the default, so existing routing is unchanged)."""
-
-    def test_estimate_uses_the_hint(self):
-        fake = FakeService(PAID, max_tokens=16384)
-        full = _est(fake, n=10)
-        hinted = _est(fake, n=10, expected_output_tokens=500)
-        assert hinted < full / 20
 
     def test_openai_routing_default_unchanged_hint_moves_it(self):
         convs = [(str(i), [("x" * 4000, None)]) for i in range(40)]

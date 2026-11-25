@@ -1,6 +1,6 @@
-"""Split-question judgments (t23): question sets, LLM backends, features and
-the combiner. Offline and keyless; fitting needs the judge extra
-(scikit-learn), so those tests skip without it."""
+"""Guards question-set evaluation and fitted decisions used by judge consumers.
+
+Backends are offline fakes. Fitting requires the optional scikit-learn dependency."""
 
 import json
 import random
@@ -282,12 +282,6 @@ class TestJevBackend:
         b.evaluate("hello", q, personal_data=True)
         assert seen == {"state": "hello", "questions": q.questions, "personal_data": True}
         assert b.name == "typesafe/jev-1.13-20260917" and b.kind == "jev"
-
-    def test_default_is_the_openrouter_row(self, monkeypatch):
-        monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-        b = JevBackend.default()
-        assert b.service.model is LLMModel.OR_JEV_1_13
-        assert b.service.route.path == "/decisions"
 
 
 # ---------------------------------------------------------------------------

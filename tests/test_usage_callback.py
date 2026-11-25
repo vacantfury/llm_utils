@@ -1,6 +1,6 @@
-"""Default usage record: one dict per call to the process-wide callback a caller
-registers (``llm_utils.set_usage_callback``), only when no usage hook is
-installed. Provider clients are stubbed; no network, no keys, no real ledger."""
+"""Guards consumer usage callbacks and their isolation from explicit usage hooks.
+
+Provider clients are stubbed; no network or real ledger is used."""
 
 from types import SimpleNamespace
 

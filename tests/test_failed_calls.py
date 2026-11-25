@@ -1,7 +1,7 @@
-"""Failed calls leave one usage record (status error | timeout, an error
-class, zero tokens and cost), recorded once per final outcome: a retry that
-later succeeds records only its success. Provider clients are faked and a
-collecting usage callback is registered — no network, no keys, no real ledger."""
+"""Guards consumer usage records against lost or duplicated failure outcomes.
+
+A retry that succeeds records only its success. Provider clients and the usage
+callback are fakes; no network or real ledger is used."""
 
 import asyncio
 from types import SimpleNamespace

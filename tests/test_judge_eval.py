@@ -1,6 +1,6 @@
-"""The judge eval verb (t23): answering with a cache, scoring backends on the
-same splits, paired comparison, fitting the deployable combiner. Offline:
-the backends are fakes; needs the judge extra (scikit-learn)."""
+"""Guards cached judge evaluations, backend comparisons and deployable combiners.
+
+Backends are offline fakes; fitting requires scikit-learn."""
 
 import json
 import random

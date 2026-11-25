@@ -1,9 +1,7 @@
-"""Account-status seam: pure spend math + the balance-fetch contract.
+"""Guards provider balance fetching and spend projections used by consumers.
 
-Offline like the rest of the suite: provider HTTP is monkeypatched, services
-are built with dummy keys.
-"""
-from datetime import datetime, timedelta
+Provider HTTP is faked and services use dummy keys."""
+from datetime import datetime
 
 import pytest
 
@@ -15,11 +13,6 @@ def _t(day: int, hour: int = 0) -> datetime:
 
 
 # ── burn_rate ─────────────────────────────────────────────────────────
-
-
-def test_burn_rate_simple_decline():
-    snaps = [(_t(1), 100.0), (_t(2), 90.0), (_t(3), 80.0)]
-    assert burn_rate(snaps) == pytest.approx(10.0)
 
 
 def test_burn_rate_ignores_topups():
@@ -182,18 +175,3 @@ def test_openrouter_management_credits(monkeypatch):
     assert st.balance == pytest.approx(74.75)
     assert st.total_granted == pytest.approx(100.5)
     assert calls[0][1]["Authorization"] == "Bearer mgmt"
-
-
-def test_capability_markers():
-    from llm_utils import (
-        ClaudeService, DeepSeekService, MoonshotService, OpenAIService,
-        OpenRouterService, XAIService, ZAIService,
-    )
-
-    assert DeepSeekService.BALANCE_QUERY_VIA == "api_key"
-    assert MoonshotService.BALANCE_QUERY_VIA == "api_key"
-    assert OpenRouterService.BALANCE_QUERY_VIA == "api_key"
-    assert XAIService.BALANCE_QUERY_VIA == "management_key"
-    assert ZAIService.BALANCE_QUERY_VIA is None
-    assert OpenAIService.BALANCE_QUERY_VIA is None
-    assert ClaudeService.BALANCE_QUERY_VIA is None

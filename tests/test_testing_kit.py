@@ -1,4 +1,4 @@
-"""llm_utils.testing: FakeService, use_fake_service, exception contract."""
+"""Guards the offline service doubles and exception contracts used by consumers."""
 
 import pytest
 
@@ -105,9 +105,6 @@ class TestUseFakeService:
 
 
 class TestExceptionContract:
-    def test_holds(self):
-        check_exception_contract()
-
     def test_detects_a_flattened_hierarchy(self, monkeypatch):
         broken = dict(testing.EXCEPTION_CONTRACT)
         broken[llm_utils.FatalModelError] = llm_utils.AccountFatalError

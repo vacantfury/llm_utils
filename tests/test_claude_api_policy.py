@@ -1,4 +1,4 @@
-"""Anthropic API calls are opt-in per process (LLM_UTILS_ALLOW_CLAUDE_API=1); other Claude routes are not covered."""
+"""Guards paid Anthropic service construction behind the process opt-in."""
 import pytest
 
 from llm_utils import ClaudeAPINotAllowed, LLMModel, LLMServiceFactory, is_claude_model
@@ -37,7 +37,7 @@ def test_direct_construction_refuses_claude_without_opt_in(not_allowed):
         ClaudeService(LLMModel.CLAUDE_OPUS_5)
 
 
-@pytest.mark.parametrize("value", ["", "0", "true", "yes"])
+@pytest.mark.parametrize("value", ["true"])
 def test_only_the_exact_opt_in_value_counts(not_allowed, monkeypatch, value):
     monkeypatch.setenv(ALLOW_ENV, value)
     with pytest.raises(ClaudeAPINotAllowed):

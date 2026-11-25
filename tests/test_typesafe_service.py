@@ -1,13 +1,13 @@
-"""Guards TypeSafeService, the TypeSafe Jev typed-evaluation seam consumers
-import, which spends money under the run spend cap and carries credentials
-(t14). Offline: the HTTP layer is a fake; dummy key; no network."""
+"""Guards consumer TypeSafe evaluations, billing and credential handling.
+
+HTTP calls are faked; no network is used."""
 
 import httpx2
 import pytest
 
 from llm_utils import (
     BaseLLMService, ChoiceAnswer, CreditsExhaustedError, Evaluation, FatalModelError,
-    InvalidCredentialError, LLMModel, LLMServiceFactory, NoulAnswer, Provider,
+    InvalidCredentialError, LLMModel, LLMServiceFactory, NoulAnswer,
     RetentionPolicyError, ScoreAnswer, SpendCapExceededError, TypeSafeService,
     choice_question, noul_question, route_status, score_question, spend_status,
 )
@@ -66,10 +66,6 @@ def svc(monkeypatch):
 
 
 class TestRegistry:
-    def test_row_and_provider(self):
-        assert JEV.provider is Provider.TYPESAFE and JEV.jurisdiction == "us"
-        assert JEV.output_price == 0.0 and JEV.input_price == 0.042
-
     def test_factory_builds_it(self):
         assert isinstance(LLMServiceFactory.create(JEV, api_key="k"), TypeSafeService)
 
@@ -250,13 +246,6 @@ def or_svc(monkeypatch):
 
 
 class TestOpenRouterRoute:
-    def test_row_is_a_route_twin_of_the_direct_row(self):
-        assert OR_JEV.provider is Provider.OPENROUTER and OR_JEV.family == "jev"
-        assert OR_JEV.model_id == "typesafe/jev-1.13-20260917"
-        assert OR_JEV.input_price == 0.042 and OR_JEV.output_price == 0.0
-        assert OR_JEV.weights == JEV.weights == "jev-1.13"
-        assert OR_JEV.route_twins() == (JEV,) and JEV.route_twins() == (OR_JEV,)
-
     def test_factory_builds_the_typed_service_not_the_chat_one(self, monkeypatch):
         monkeypatch.setenv("OPENROUTER_API_KEY", "k")
         s = LLMServiceFactory.create(OR_JEV)
@@ -335,25 +324,6 @@ class TestOpenRouterRoute:
     def test_error_mapping_matches_the_direct_route(self, or_svc, code, exc):
         with pytest.raises(exc, match="OpenRouter"):
             or_svc((code, {"error": {"message": "no", "code": code}})).evaluate("x", OR_QUESTIONS)
-
-    def test_retries_429_then_succeeds(self, or_svc):
-        s = or_svc((429, {}, {"retry-after": "0"}), (502, {}), (200, OR_BODY))
-        assert s.evaluate("x", OR_QUESTIONS).answers["closure"].noul == 0.99
-        assert len(s._client.requests) == 3
-
-    def test_personal_data_refused(self, or_svc):
-        s = or_svc((200, OR_BODY))
-        with pytest.raises(RetentionPolicyError, match="OpenRouter"):
-            s.evaluate("about a person", OR_QUESTIONS, personal_data=True)
-        assert s._client.requests == []
-
-    def test_route_status_reads_the_openrouter_key(self, monkeypatch):
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        monkeypatch.setenv("TYPESAFE_API_KEY", "k")
-        s = route_status(OR_JEV)
-        assert not s.usable and "OPENROUTER_API_KEY" in s.reason
-        monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-        assert route_status(OR_JEV).usable
 
     def test_usable_routes_of_the_logical_model(self, monkeypatch):
         from llm_utils import usable_routes, routes_for

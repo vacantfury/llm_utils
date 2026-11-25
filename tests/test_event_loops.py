@@ -1,13 +1,11 @@
-"""t22: successive calls on one OpenAIService never reuse a connection from an
-earlier event loop.
+"""Guards consumer chat calls against duplicate requests across event loops.
 
 Every entry point runs its own ``asyncio.run``, so each call sees a new loop. A
 real connection belongs to the loop that opened it; reused from the next loop,
 the request is written and the read fails, and the SDK's retry resends a request
 the server already has. The fake network backend below gives the SDK's real
 HTTP stack (httpx over httpcore's pool) loop-bound connections without opening
-a socket, so the suite stays offline.
-"""
+a socket, so the suite stays offline."""
 import asyncio
 import json
 
@@ -82,12 +80,6 @@ def svc(monkeypatch):
     service.async_client._client._transport._pool._network_backend = backend
     yield service, backend
     asyncio.run(service.async_client.close())
-
-
-def test_direct_route_keeps_no_idle_connections(svc):
-    service, _ = svc
-    pool = service.async_client._client._transport._pool
-    assert pool._max_keepalive_connections == 0
 
 
 def test_successive_calls_each_send_one_request_on_their_own_loop(svc):

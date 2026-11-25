@@ -1,5 +1,4 @@
-"""Usage-hook seam: fires on every recorded call, exceptions swallowed,
-label pass-through. No network, no keys."""
+"""Guards consumer usage hooks, accounting labels and test-cost separation."""
 
 import pytest
 

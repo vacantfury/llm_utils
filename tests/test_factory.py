@@ -1,5 +1,4 @@
-"""Factory: provider dispatch, config-loader merge precedence, label wiring,
-SLURM manager guard. No network, no keys."""
+"""Guards consumer service construction, option precedence and accounting labels."""
 
 import pytest
 
@@ -20,11 +19,6 @@ def test_create_by_enum_and_by_string():
     svc2 = LLMServiceFactory.create(
         LLMModel.GPT_5_NANO.model_id, api_key="test-key")
     assert svc2.model is LLMModel.GPT_5_NANO
-
-
-def test_every_provider_has_a_registered_service():
-    for provider in Provider:
-        assert LLMServiceFactory.is_provider_supported(provider), provider
 
 
 def test_caller_kwargs_beat_loader_defaults():

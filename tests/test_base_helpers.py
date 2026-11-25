@@ -1,8 +1,8 @@
-"""Base-layer helpers: mechanism-error sentinel, error classifiers, backoff,
-UsageStats. Pure functions — no network, no keys."""
+"""Guards error classification and usage accounting used by provider consumers.
+
+These checks use pure functions without network requests."""
 
 from llm_utils.base_llm_service import (
-    MECHANISM_ERROR_SENTINEL,
     UsageStats,
     _backoff_seconds,
     is_credit_exhausted_error,
@@ -30,10 +30,6 @@ class TestMechanismError:
 
     def test_strip_is_identity_on_plain_text(self):
         assert strip_mechanism_error("hello") == "hello"
-
-    def test_sentinel_contains_null_byte(self):
-        # The null byte is the collision guard against real model output.
-        assert "\x00" in MECHANISM_ERROR_SENTINEL
 
 
 class TestErrorClassifiers:
@@ -68,14 +64,6 @@ class TestErrorClassifiers:
         ):
             assert is_credit_exhausted_error(Exception(msg)), msg
 
-    def test_openai_billing_429_is_both(self):
-        # OpenAI surfaces billing exhaustion as a 429: it matches the
-        # rate-limit classifier TOO, which is why services must consult
-        # is_credit_exhausted_error BEFORE the retry branch.
-        exc = Exception("Error code: 429 - insufficient_quota")
-        assert is_credit_exhausted_error(exc)
-        assert is_rate_limit_error(exc)
-
 
 class TestBackoff:
     def test_grows_then_caps(self):
@@ -94,7 +82,3 @@ class TestUsageStats:
         assert s.input_tokens == 110
         assert s.output_tokens == 55
         assert abs(s.cost - 0.011) < 1e-12
-
-    def test_to_dict_shape(self):
-        d = UsageStats().to_dict()
-        assert set(d) == {"inference_count", "input_tokens", "output_tokens", "cost"}

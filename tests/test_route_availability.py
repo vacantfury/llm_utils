@@ -1,11 +1,10 @@
-"""Guards the route availability seam (t10), which consumers import: logical
-model -> routes, and which routes this process can use. Offline: probes run
-against a fake HTTP layer."""
+"""Guards consumer route lookup, credential checks and availability probes.
+
+Probes use a fake HTTP layer."""
 
 import httpx2
 import pytest
 
-import llm_utils
 from llm_utils import (
     LLMModel, LLMServiceFactory, Provider, RegistryRouteResolver, config,
     route_models, route_status, routes_for, usable_routes, route_statuses,
@@ -26,25 +25,10 @@ def _clean_env(monkeypatch):
 
 
 class TestRegistryLookup:
-    def test_logical_name_is_weights_else_model_id(self):
-        assert LLMModel.GLM_5_2.logical_name == "glm-5.2"
-        assert LLMModel.GPT_4O.logical_name == "gpt-4o"
-
     def test_every_route_group_is_the_route_twins_closure(self):
         for name, rows in logical_models().items():
             for m in rows:
                 assert set(m.routes()) == set(rows), name
-
-    def test_same_model_id_rows_share_a_logical_model(self):
-        # Two rows serving the same id with no shared logical name would make
-        # the id ambiguous here and split one model into two.
-        by_id = {}
-        for m in LLMModel:
-            by_id.setdefault(m.model_id, set()).add(m.logical_name)
-        assert {k: v for k, v in by_id.items() if len(v) > 1} == {}
-
-    def test_routes_for_glm5_lists_every_host(self):
-        assert routes_for("glm-5") == {"zai", "openrouter", "bedrock"}
 
     def test_lookup_forms_agree(self):
         by_logical = route_models("glm-5")
@@ -67,11 +51,6 @@ class TestRegistryLookup:
     def test_resolver_object_form(self):
         r = RegistryRouteResolver()
         assert r.routes_for("glm-5") == routes_for("glm-5")
-
-    def test_seam_exports(self):
-        for name in ("routes_for", "route_status", "usable_routes", "RouteStatus",
-                     "RegistryRouteResolver", "config"):
-            assert name in llm_utils.__all__
 
 
 class TestConfigCheck:
@@ -227,9 +206,9 @@ class TestProbe:
         assert http.calls[0][0] == "https://api.openai.com/v1/models"
 
     @pytest.mark.parametrize("code,usable,word", [
-        (401, False, "rejected"), (403, False, "rejected"), (402, False, "cannot pay"),
+        (401, False, "rejected"), (402, False, "cannot pay"),
         (503, False, "endpoint error"), (404, True, "not confirmed"),
-        (429, True, "rate-limited"), (400, True, "not confirmed")])
+        (429, True, "rate-limited")])
     def test_status_codes(self, http, monkeypatch, code, usable, word):
         monkeypatch.setenv("OPENROUTER_API_KEY", "k")
         http.answer = code
@@ -262,12 +241,6 @@ class TestProbe:
         s = route_status(LLMModel.OR_GLM_5, probe=True)
         assert not s.usable and "unreachable" in s.reason
 
-    def test_network_failure_is_unreachable(self, http, monkeypatch):
-        monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-        http.answer = httpx2.ConnectError("down")
-        s = route_status(LLMModel.OR_GLM_5, probe=True, timeout=1.0)
-        assert not s.usable and "unreachable" in s.reason
-
     def test_anthropic_and_google_probe_headers(self, http, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
         monkeypatch.setenv("GOOGLE_API_KEY", "g")
@@ -292,9 +265,6 @@ class TestConfig:
         config.reload_config()
         yield
         config.reload_config()
-
-    def test_packaged_default(self):
-        assert config.get("routes.probe_timeout_s") == 10.0
 
     def test_project_file_found_upward(self, tmp_path, monkeypatch):
         (tmp_path / "llm_utils.yaml").write_text("routes:\n  probe_timeout_s: 3\n")

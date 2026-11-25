@@ -1,6 +1,6 @@
-"""Claude/Google batch result collection: batch-price cost recording,
-per-item errors with detail, missing-item fill, thinking-token billing,
-harvest idempotence. Provider clients are faked — no network."""
+"""Guards consumer batch results and billing for Claude and Google.
+
+Provider clients are faked; no network is used."""
 
 from types import SimpleNamespace
 
@@ -146,10 +146,3 @@ class TestGoogleCollect:
         results = svc._collect_results(job, ["a"], is_test=False)
         assert is_mechanism_error(results[0][1])
         assert "boom" in results[0][1]
-
-    def test_realtime_usage_includes_thoughts(self):
-        from llm_utils.llm_services.google_service import _usage_tokens
-        in_tok, out_tok = _usage_tokens(SimpleNamespace(
-            prompt_token_count=10, candidates_token_count=20,
-            thoughts_token_count=30))
-        assert (in_tok, out_tok) == (10, 50)

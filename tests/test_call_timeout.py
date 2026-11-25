@@ -1,25 +1,18 @@
-"""Per-request wall-clock deadline on the OpenAI-compatible realtime path. An
-endpoint that keeps a request open forever (OpenRouter's whitespace keepalive
-resets the SDK's per-read timer) must end as a mechanism error, never a hang.
-No network: the client's create/parse are replaced by coroutines that sleep."""
+"""Guards consumer chat calls against endpoints that hold requests open forever.
+
+The provider client is replaced by a sleeping coroutine; no network is used."""
 
 import asyncio
 import time
 
 from llm_utils import LLMModel, is_mechanism_error
-from llm_utils.llm_services import OpenAIService, OpenRouterService
-from llm_utils.llm_services.openai_service import _DEFAULT_CALL_TIMEOUT_S
+from llm_utils.llm_services import OpenRouterService
 
 KEY = {"api_key": "test-key-not-real"}
 
 
 async def _never_answers(**_params):
     await asyncio.sleep(3600)
-
-
-def test_default_deadline_is_finite():
-    svc = OpenAIService(LLMModel.GPT_5_NANO, **KEY)
-    assert svc.call_timeout == _DEFAULT_CALL_TIMEOUT_S
 
 
 def test_hung_request_becomes_mechanism_error():

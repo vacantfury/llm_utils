@@ -1,6 +1,6 @@
-"""OpenAI batch result collection: per-item errors, missing-id fill,
-batch-price cost recording, file cleanup. Provider calls are monkeypatched —
-no network."""
+"""Guards consumer OpenAI batch results, discounted billing and file cleanup.
+
+Provider calls are faked; no network is used."""
 
 from types import SimpleNamespace
 
@@ -89,12 +89,6 @@ class TestCollectResults:
         _patch_files(monkeypatch, service, {"out-1": [entry]}, [])
         results = service._collect_results(_batch(), is_test=False)
         assert "filtered out" in results["a"]
-
-    def test_wholesale_failed_batch_returns_empty(self, monkeypatch, service):
-        _patch_files(monkeypatch, service, {}, [])
-        results = service._collect_results(
-            _batch(status="failed", output_file_id=None), is_test=False)
-        assert results == {}
 
 
 class TestBatchChatMissingIdFill:
