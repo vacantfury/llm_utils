@@ -71,15 +71,27 @@ judge:
   # eval report's band coverage and in-band accuracy; raise it when a set
   # has few rows per label and the thresholds swing between splits.
   cv_folds: 5
+  # Outer evaluation split: random preserves the original stratified draws;
+  # grouped draws whole groups; time_ordered scores one later holdout.
+  # Choose from the sampling unit and deployment order of the evaluation
+  # data, then compare held-out metrics. Unknown strategies raise an error.
+  # The combiner's inner threshold-fitting folds remain stratified.
+  split_strategy: random
+  # Top-level row fields used only by the corresponding split strategy.
+  group_key: group
+  time_key: timestamp
   # Repeated stratified fit/test splits the backend eval scores over. Basis
   # for 50: the 2026-10-11 Jev / Luna / Haiku comparison (400 rows). Tuning
   # path: the report's paired win shares; raise it when they sit near 50%.
   eval_splits: 50
+  # eval_splits applies to random/grouped; time_ordered has one split.
   # Share of the labeled rows each eval split fits on (the rest is scored).
   # Basis for 0.5: the same 2026-10-11 comparison. Tuning path: lower it when
   # test metrics vary too much between splits; raise it when the fit is short
   # of rows per label.
   fit_fraction: 0.5
+  # For grouped this is the fraction of unique groups. For time_ordered it
+  # is the target fraction of earliest rows; boundary ties all go to test.
   # Bins of the expected calibration error (top-label confidence). Basis for
   # 10: the same comparison. Tuning path: fewer bins when test parts are
   # small (under about 100 rows per bin the estimate is noisy).

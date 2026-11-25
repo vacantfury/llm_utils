@@ -13,10 +13,11 @@ questions (the set's ``answers_hash``) and retries rows that failed. A
 account-level failure (bad key, no credit, the run spend cap) stops that
 backend's remaining rows and is reported.
 
-Scoring: ``judge.eval_splits`` repeated stratified fit/test splits of all
-rows (``judge.fit_fraction`` to fit, ``judge.seed``), the SAME splits for
+Scoring: ``judge.split_strategy`` selects repeated stratified random splits,
+repeated group-separated splits, or one chronological holdout. The SAME
+splits of all rows (``judge.fit_fraction`` to fit) are used for
 every backend, each restricted to the rows that backend answered. Per
-backend: accuracy, AUC, Brier score, expected calibration error, band
+backend: accuracy, per-class recall, AUC, Brier score, expected calibration error, band
 coverage on the test part and accuracy within the act/drop bands, unknown
 rates overall and per question, each question's feature means, spreads and
 mean fitted weights (a question whose answers never vary, or are mostly
@@ -37,6 +38,7 @@ import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
@@ -80,7 +82,7 @@ def _check_rows(rows: Sequence[Mapping[str, Any]], qset: QuestionSet) -> List[di
         if row["label"] not in qset.labels:
             raise ValueError(f"row {rid!r}: label {row['label']!r} is not in the set's "
                              f"vocabulary {list(qset.labels)}")
-        out.append({"id": rid, "state": row["state"], "label": row["label"]})
+        out.append({**row, "id": rid})
     if not out:
         raise ValueError("no rows")
     return out
@@ -272,7 +274,8 @@ class EvalReport:
         qs = self.question_set
         lines = [f"**{qs['name']}** v{qs['version']}: {self.rows} rows "
                  f"({', '.join(f'{k} {v}' for k, v in self.label_counts.items())}), "
-                 f"{self.settings['eval_splits']} splits fitting on "
+                 f"{self.settings['eval_splits']} "
+                 f"{self.settings.get('split_strategy', 'random')} splits, target fit fraction "
                  f"{self.settings['fit_fraction']:.0%}", "",
                  "| backend | answered | errors | refused | accuracy | AUC | Brier | ECE "
                  "| act / drop / escalate | in-band accuracy | unknown | latency p50 / p95 "
@@ -289,6 +292,11 @@ class EvalReport:
                 f"{_pct(bands.get('escalate'))} | {_fmt(bands.get('accuracy_in_band'))} "
                 f"| {_pct(b['unknown_rate'])} | {_fmt(lat.get('median'), 2)} / "
                 f"{_fmt(lat.get('p95'), 2)} s | {b['cost']['text']} |")
+        if any((b.get("metrics") or {}).get("recall_per_class") for b in self.backends.values()):
+            lines += ["", "| backend | label | recall |", "|---|---|---|"]
+            for name, b in self.backends.items():
+                for label, value in (b.get("metrics") or {}).get("recall_per_class", {}).items():
+                    lines.append(f"| {name} | {label} | {_fmt(value)} |")
         if self.pairs:
             lines += ["", "| pair | accuracy difference | AUC difference "
                       "| first wins on AUC | second wins on AUC |", "|---|---|---|---|---|"]
@@ -359,10 +367,75 @@ def _mean_std(values: List[float]) -> Dict[str, Optional[float]]:
     return {"mean": float(np.mean(finite)), "std": float(np.std(finite))}
 
 
-def _score_backends(qset: QuestionSet, rows: List[dict], answered: Dict[str, Dict[str, Any]],
-                    settings: Mapping[str, Any]) -> Dict[str, Any]:
+def _split_indices(rows: List[dict], y: Any, settings: Mapping[str, Any]) -> List[Any]:
+    """Outer fit/test indices, computed once before any backend calls.
+
+    Group splits count groups, not rows. Chronological evaluation is one
+    deterministic holdout, not repeated measurements of the same partition.
+    Ties at its boundary belong entirely to test, so fit is strictly earlier.
+    """
     import numpy as np
-    from sklearn.model_selection import StratifiedShuffleSplit
+    from sklearn.model_selection import GroupShuffleSplit, StratifiedShuffleSplit
+
+    strategy = settings["split_strategy"]
+    fraction = float(settings["fit_fraction"])
+    if not 0 < fraction < 1:
+        raise ValueError("fit_fraction must be strictly between 0 and 1")
+    if strategy == "time_ordered":
+        key = settings["time_key"]
+        times = []
+        for row in rows:
+            value = row.get(key)
+            try:
+                if isinstance(value, str):
+                    value = datetime.fromisoformat(value)
+                if isinstance(value, datetime):
+                    if value.utcoffset() is None:
+                        raise ValueError("timestamp needs a timezone")
+                    value = value.timestamp()
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError("expected numeric epoch time or an ISO 8601 timestamp")
+                if not math.isfinite(value):
+                    raise ValueError("timestamp must be finite")
+            except (ValueError, OverflowError, OSError) as e:
+                raise ValueError(f"row {row['id']!r}: invalid {key!r}: {e}") from None
+            times.append(value)
+        order = np.argsort(times, kind="stable")
+        cut = int(len(rows) * fraction)
+        if cut == 0:
+            raise ValueError("time_ordered split has no fit rows; increase fit_fraction")
+        boundary = times[order[cut]]
+        fit = np.asarray([i for i in order if times[i] < boundary], dtype=int)
+        test = np.asarray([i for i in order if times[i] >= boundary], dtype=int)
+        if not len(fit):
+            raise ValueError("time_ordered split has no fit rows before the boundary timestamp")
+        return [(fit, test)]
+    if strategy not in ("random", "grouped"):
+        raise ValueError(f"unknown split_strategy {strategy!r}; use random, grouped or time_ordered")
+
+    groups = None
+    if strategy == "grouped":
+        key = settings["group_key"]
+        codes: Dict[Any, int] = {}
+        groups = []
+        for row in rows:
+            value = row.get(key)
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                raise ValueError(f"row {row['id']!r}: {key!r} must be a string or integer group")
+            groups.append(codes.setdefault(value, len(codes)))
+    splitter_type = GroupShuffleSplit if strategy == "grouped" else StratifiedShuffleSplit
+    splitter = splitter_type(n_splits=int(settings["eval_splits"]),
+                             train_size=fraction, random_state=int(settings["seed"]))
+    try:
+        return list(splitter.split(np.zeros(len(rows)), y, groups))
+    except ValueError as e:
+        raise ValueError(f"cannot split {len(rows)} rows ({strategy}): {e}") from None
+
+
+def _score_backends(qset: QuestionSet, rows: List[dict], answered: Dict[str, Dict[str, Any]],
+                    settings: Mapping[str, Any], *, splits: Optional[List[Any]] = None
+                    ) -> Dict[str, Any]:
+    import numpy as np
 
     from ._metrics import scores
 
@@ -370,13 +443,8 @@ def _score_backends(qset: QuestionSet, rows: List[dict], answered: Dict[str, Dic
     y_all = np.asarray([labels.index(r["label"]) for r in rows])
     ids = [r["id"] for r in rows]
     label_of = {r["id"]: labels.index(r["label"]) for r in rows}
-    splitter = StratifiedShuffleSplit(n_splits=int(settings["eval_splits"]),
-                                      train_size=float(settings["fit_fraction"]),
-                                      random_state=int(settings["seed"]))
-    try:
-        splits = list(splitter.split(np.zeros(len(ids)), y_all))
-    except ValueError as e:
-        raise ValueError(f"cannot split {len(ids)} rows by label: {e}") from None
+    if splits is None:
+        splits = _split_indices(rows, y_all, settings)
 
     per_split: Dict[str, List[Optional[Dict[str, Any]]]] = {b: [] for b in answered}
     for fit_idx, test_idx in splits:
@@ -428,7 +496,10 @@ def _backend_summary(qset: QuestionSet, b: str, data: Dict[str, Any], answer: Di
     bands = None
     if scored:
         metrics = {k: _mean_std([s["metrics"][k] for s in scored])["mean"]
-                   for k in scored[0]["metrics"]}
+                   for k in scored[0]["metrics"] if k != "recall_per_class"}
+        metrics["recall_per_class"] = {
+            label: _mean_std([s["metrics"]["recall_per_class"][i] for s in scored])["mean"]
+            for i, label in enumerate(labels)}
         metrics["std"] = {k: _mean_std([s["metrics"][k] for s in scored])["std"]
                           for k in ("accuracy", "auc")}
         bands = {k: float(np.mean([s["bands"][k] for s in scored]))
@@ -548,7 +619,8 @@ def eval_backends(qset: QuestionSet, rows: Sequence[Mapping[str, Any]],
                   personal_data: bool = False,
                   workers: Union[None, int, Mapping[str, int]] = None,
                   eval_splits: Optional[int] = None, fit_fraction: Optional[float] = None,
-                  seed: Optional[int] = None) -> EvalReport:
+                  seed: Optional[int] = None, split_strategy: Optional[str] = None,
+                  group_key: Optional[str] = None, time_key: Optional[str] = None) -> EvalReport:
     """Answer ``rows`` (``{"id", "state", "label"}``) with every backend
     (cached in ``cache_dir``), then score each backend and every pair.
 
@@ -556,12 +628,30 @@ def eval_backends(qset: QuestionSet, rows: Sequence[Mapping[str, Any]],
     mapping by backend name. ``eval_splits``, ``fit_fraction`` and ``seed``
     override the ``judge`` config for this call. ``personal_data`` is passed
     to every backend (Jev refuses it; LLM backends leave it to the caller).
+
+    ``split_strategy`` overrides ``judge.split_strategy``:
+    ``random`` (default) preserves stratified random splits; ``grouped``
+    uses whole groups from each row's ``group_key`` field (default ``group``,
+    string or integer), with ``fit_fraction`` measured in groups;
+    ``time_ordered`` sorts by ``time_key`` (default ``timestamp``) and holds
+    out the later rows once, regardless of ``eval_splits``. Times are finite
+    numeric epoch values or timezone-aware ISO 8601 strings/datetimes. The
+    first floor(n * fit_fraction) rows are the candidate fit set; ties at
+    the first test timestamp move to test. Missing/invalid metadata or an
+    empty fit set raises before backend calls. Extra row fields are never
+    sent to backends or stored in the answer cache.
+
+    These strategies affect the outer evaluation only; the combiner still
+    fits its thresholds with stratified inner folds. Reports record the
+    actual split count and mean recall per label (zero for absent labels).
     """
     checked = _check_rows(rows, qset)
     names = [b.name for b in backends]
     if len(set(names)) != len(names) or not names:
         raise ValueError(f"backend names must be present and unique, got {names}")
-    settings = judge_settings(eval_splits=eval_splits, fit_fraction=fit_fraction, seed=seed)
+    settings = judge_settings(eval_splits=eval_splits, fit_fraction=fit_fraction, seed=seed,
+                              split_strategy=split_strategy, group_key=group_key, time_key=time_key)
+    splits = _split_indices(checked, [qset.label_names.index(r["label"]) for r in checked], settings)
     cache = Path(cache_dir)
     answers, answered = {}, {}
     for backend in backends:
@@ -570,7 +660,7 @@ def eval_backends(qset: QuestionSet, rows: Sequence[Mapping[str, Any]],
         a["rows"] = checked
         answers[backend.name] = a
         answered[backend.name] = _answered(qset, a["records"], checked)
-    scored = _score_backends(qset, checked, answered, settings)["splits"]
+    scored = _score_backends(qset, checked, answered, settings, splits=splits)["splits"]
     report_backends = {b: _backend_summary(qset, b, answered[b], answers[b], scored[b])
                        for b in names}
     pairs = [_pair(a, b, scored[a], scored[b], len(qset.labels))
@@ -581,8 +671,10 @@ def eval_backends(qset: QuestionSet, rows: Sequence[Mapping[str, Any]],
                       "content_hash": qset.content_hash},
         rows=len(checked),
         label_counts={l: counts.get(l, 0) for l in qset.label_names},
-        settings={k: settings[k] for k in ("eval_splits", "fit_fraction", "seed", "cv_folds",
-                                           "logistic_c", "logistic_max_iter", "ece_bins")},
+        settings={**{k: settings[k] for k in ("fit_fraction", "seed", "cv_folds", "logistic_c",
+                                             "logistic_max_iter", "ece_bins", "split_strategy",
+                                             "group_key", "time_key")},
+                  "eval_splits": len(splits)},
         backends=report_backends, pairs=pairs)
 
 

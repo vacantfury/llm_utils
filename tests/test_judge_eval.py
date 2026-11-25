@@ -278,3 +278,177 @@ def test_unanswered_rows_are_counted_by_label_and_flagged(tmp_path):
     b = report.backends["jev"]
     assert b["unanswered_by_label"] == {"harmful": 6, "harmless": 0}
     assert any("unanswered rows by label" in f for f in b["flags"])
+
+
+def test_default_split_indices_match_original_stratified_shuffle():
+    import numpy as np
+    from sklearn.model_selection import StratifiedShuffleSplit
+
+    from llm_utils.judge.combiner import judge_settings
+    from llm_utils.judge.evaluate import _split_indices
+
+    settings = judge_settings(eval_splits=3)
+    y = np.asarray([QSET.label_names.index(r["label"]) for r in ROWS])
+    expected = list(StratifiedShuffleSplit(
+        n_splits=3, train_size=settings["fit_fraction"], random_state=settings["seed"]
+    ).split(np.zeros(len(ROWS)), y))
+    actual = _split_indices(ROWS, y, settings)
+    for (fit, test), (old_fit, old_test) in zip(actual, expected):
+        np.testing.assert_array_equal(fit, old_fit)
+        np.testing.assert_array_equal(test, old_test)
+    assert len(actual) == len(expected)
+
+
+def test_grouped_splits_never_share_groups_and_are_reproducible():
+    import numpy as np
+
+    from llm_utils.judge.combiner import judge_settings
+    from llm_utils.judge.evaluate import _check_rows, _split_indices
+
+    # Unequal groups, noncontiguous members, and distinct integer/string ids.
+    groups = [1, "1", "b", "c", "d", "d", "d"]
+    rows = _check_rows([dict(r, cluster=groups[i % len(groups)])
+                        for i, r in enumerate(ROWS)], QSET)
+    settings = judge_settings(split_strategy="grouped", group_key="cluster", eval_splits=4)
+    splits = _split_indices(rows, [r["label"] for r in rows], settings)
+    again = _split_indices(rows, [r["label"] for r in rows], settings)
+    assert len(splits) == 4
+    for (fit, test), (fit_again, test_again) in zip(splits, again):
+        fit_groups = {rows[i]["cluster"] for i in fit}
+        test_groups = {rows[i]["cluster"] for i in test}
+        assert fit_groups.isdisjoint(test_groups)
+        assert len(fit_groups) == 2  # floor(5 unique groups * 0.5)
+        assert set(fit) | set(test) == set(range(len(rows)))
+        np.testing.assert_array_equal(fit, fit_again)
+        np.testing.assert_array_equal(test, test_again)
+
+
+def test_time_ordered_split_sorts_rows_and_keeps_boundary_ties_together():
+    from llm_utils.judge.combiner import judge_settings
+    from llm_utils.judge.evaluate import _check_rows, _split_indices
+
+    times = [30, 10, 20, 20, 40, 20]
+    rows = _check_rows([dict(r, observed=t) for r, t in zip(ROWS, times)], QSET)
+    settings = judge_settings(split_strategy="time_ordered", time_key="observed")
+    splits = _split_indices(rows, [r["label"] for r in rows], settings)
+    assert len(splits) == 1
+    fit, test = splits[0]
+    assert max(rows[i]["observed"] for i in fit) < min(rows[i]["observed"] for i in test)
+    assert set(fit) == {1}
+    assert set(test) == {0, 2, 3, 4, 5}
+
+
+def test_time_ordered_split_compares_instants_across_timezone_offsets():
+    from llm_utils.judge.combiner import judge_settings
+    from llm_utils.judge.evaluate import _split_indices
+
+    times = ["2026-01-01T00:00:00-08:00", "2026-01-01T02:00:00Z",
+             "2026-01-01T01:00:00Z", "2026-01-01T04:00:00+00:00"]
+    rows = [dict(r, timestamp=t) for r, t in zip(ROWS, times)]
+    fit, test = _split_indices(rows, [r["label"] for r in rows],
+                               judge_settings(split_strategy="time_ordered"))[0]
+    assert list(fit) == [2, 1]
+    assert list(test) == [3, 0]
+
+
+@pytest.mark.parametrize("strategy,metadata,match", [
+    ("grouped", {}, "group"),
+    ("grouped", {"group": []}, "group"),
+    ("grouped", {"group": "only-one"}, "cannot split"),
+    ("time_ordered", {}, "timestamp"),
+    ("time_ordered", {"timestamp": float("nan")}, "finite"),
+    ("time_ordered", {"timestamp": float("inf")}, "finite"),
+    ("time_ordered", {"timestamp": "2026-01-01"}, "timezone"),
+    ("time_ordered", {"timestamp": "not-a-date"}, "invalid"),
+    ("time_ordered", {"timestamp": True}, "invalid"),
+    ("time_ordered", {"timestamp": 1}, "no fit rows"),
+    ("unknown", {}, "unknown split_strategy"),
+])
+def test_invalid_splits_fail_before_backend_calls(tmp_path, strategy, metadata, match):
+    backend = Informative("good")
+    with pytest.raises(ValueError, match=match):
+        eval_backends(QSET, [dict(r, **metadata) for r in ROWS], [backend],
+                      cache_dir=tmp_path, split_strategy=strategy)
+    assert backend.calls == 0
+    assert not cache_path(tmp_path, backend.name).exists()
+
+
+@pytest.mark.parametrize("strategy,split_count", [("grouped", 2), ("time_ordered", 1)])
+def test_split_metadata_reaches_scoring_and_recall_reaches_reports(tmp_path, strategy, split_count):
+    rows = [dict(r, cluster=i // 4, observed=i // 2) for i, r in enumerate(ROWS)]
+    backend = Informative("good")
+    report = eval_backends(QSET, list(reversed(rows)), [backend], cache_dir=tmp_path,
+                           split_strategy=strategy, group_key="cluster", time_key="observed",
+                           eval_splits=2)
+    assert report.settings["split_strategy"] == strategy
+    assert report.settings["group_key"] == "cluster"
+    assert report.settings["time_key"] == "observed"
+    assert report.settings["eval_splits"] == split_count
+    result = report.backends["good"]
+    assert result["splits_scored"] == split_count
+    recall = result["metrics"]["recall_per_class"]
+    assert set(recall) == set(QSET.label_names)
+    assert all(0 <= value <= 1 for value in recall.values())
+    assert json.loads(report.to_json())["backends"]["good"]["metrics"]["recall_per_class"] == recall
+    assert "| backend | label | recall |" in report.to_markdown()
+    assert "| good | harmful |" in report.to_markdown()
+    for line in cache_path(tmp_path, "good").read_text().splitlines():
+        assert not {"cluster", "observed"} & json.loads(line).keys()
+
+
+def test_default_evaluation_results_match_original_random_split(tmp_path, monkeypatch):
+    import numpy as np
+    from sklearn.model_selection import StratifiedShuffleSplit
+
+    from llm_utils.judge import evaluate
+
+    default = eval_backends(QSET, ROWS, [Informative("good")], cache_dir=tmp_path, eval_splits=2)
+
+    def original_splits(rows, y, settings):
+        return list(StratifiedShuffleSplit(
+            n_splits=settings["eval_splits"], train_size=settings["fit_fraction"],
+            random_state=settings["seed"]).split(np.zeros(len(rows)), y))
+
+    monkeypatch.setattr(evaluate, "_split_indices", original_splits)
+    baseline = eval_backends(QSET, ROWS, [Informative("good")], cache_dir=tmp_path, eval_splits=2)
+    assert default.backends["good"]["metrics"] == baseline.backends["good"]["metrics"]
+    assert default.backends["good"]["bands"] == baseline.backends["good"]["bands"]
+    assert default.backends["good"]["questions"] == baseline.backends["good"]["questions"]
+
+
+def test_report_averages_recall_by_label_and_ignores_unscorable_splits():
+    from llm_utils.judge.evaluate import _backend_summary
+
+    splits = [None] + [
+        {"metrics": {"accuracy": 0.5, "auc": 0.5, "recall_per_class": recall},
+         "bands": {"act": 0.0, "drop": 0.0, "escalate": 1.0},
+         "accuracy_in_band": float("nan")}
+        for recall in ([0.2, 1.0], [0.6, 0.0])
+    ]
+    data = {"vectors": {}, "unknown": {}, "flags": {}, "latency": [], "costs": []}
+    answer = {"records": {}, "rows": [], "calls": 0, "aborted": None}
+    # With no feature vectors, _backend_summary still reports weights from
+    # scored splits; give each label its complete synthetic weight vector.
+    from llm_utils.judge.features import feature_names
+
+    for split in splits[1:]:
+        split["weights"] = {label: [0.0] * len(feature_names(QSET)) for label in QSET.label_names}
+    report = _backend_summary(QSET, "fake", data, answer, splits)
+    assert report["splits_scored"] == 2
+    assert report["metrics"]["recall_per_class"] == pytest.approx({"harmful": 0.4, "harmless": 0.5})
+
+
+def test_split_strategy_and_field_names_can_come_from_yaml_config(tmp_path):
+    from llm_utils import config
+
+    config.configure(judge={"split_strategy": "grouped", "group_key": "cluster", "eval_splits": 2})
+    rows = [dict(r, cluster=i // 4) for i, r in enumerate(ROWS)]
+    report = eval_backends(QSET, rows, [Informative("good")], cache_dir=tmp_path)
+    assert report.settings["split_strategy"] == "grouped"
+    assert report.settings["group_key"] == "cluster"
+    assert report.backends["good"]["splits_scored"] == 2
+    # Per-call random overrides do not require the configured group field.
+    report = eval_backends(QSET, ROWS, [Informative("good")], cache_dir=tmp_path,
+                           split_strategy="random")
+    assert report.settings["split_strategy"] == "random"
+    assert report.backends["good"]["splits_scored"] == 2

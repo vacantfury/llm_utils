@@ -35,7 +35,8 @@ from .questions import ESCALATE, QuestionSet
 
 FORMAT = 1                          # version of the saved YAML layout
 _SETTING_KEYS = ("cv_folds", "eval_splits", "fit_fraction", "ece_bins", "logistic_c",
-                 "logistic_max_iter", "seed", "workers")
+                 "logistic_max_iter", "seed", "workers", "split_strategy", "group_key",
+                 "time_key")
 
 
 def judge_settings(**overrides: Any) -> Dict[str, Any]:

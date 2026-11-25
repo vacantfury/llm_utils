@@ -41,10 +41,14 @@ def auc(y: Any, P: Any, n_labels: int) -> float:
                                labels=list(range(n_labels))))
 
 
-def scores(y: Any, P: Any, n_labels: int, ece_bins: int) -> Dict[str, float]:
+def scores(y: Any, P: Any, n_labels: int, ece_bins: int) -> Dict[str, Any]:
     """Accuracy of the top label, AUC, Brier score (one-class form for two
-    labels, the multiclass sum otherwise), log loss and ECE."""
-    from sklearn.metrics import brier_score_loss, log_loss
+    labels, the multiclass sum otherwise), log loss, ECE and per-class recall.
+
+    ``recall_per_class`` follows probability-column order and uses zero for
+    labels absent from ``y`` (scikit-learn's ``zero_division=0`` convention).
+    """
+    from sklearn.metrics import brier_score_loss, log_loss, recall_score
 
     labels = list(range(n_labels))
     return {
@@ -53,4 +57,6 @@ def scores(y: Any, P: Any, n_labels: int, ece_bins: int) -> Dict[str, float]:
         "brier": float(brier_score_loss(y, P, labels=labels)),
         "log_loss": float(log_loss(y, P, labels=labels)),
         "ece": ece(y, P, ece_bins),
+        "recall_per_class": recall_score(
+            y, P.argmax(axis=1), labels=labels, average=None, zero_division=0).tolist(),
     }

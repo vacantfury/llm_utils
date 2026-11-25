@@ -5,6 +5,18 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 ## [Unreleased]
 
+**Added:**
+
+- Judge backend evaluation accepts `split_strategy="grouped"` with a
+  configurable `group_key` row field, or `split_strategy="time_ordered"`
+  with a configurable `time_key`. Group splits keep groups intact; the
+  chronological mode scores one later holdout and keeps equal timestamps
+  together. Split metadata is checked before backend calls. Random
+  stratified splitting remains the default with the same seeded indices.
+- Judge scores include `recall_per_class` in probability-column order,
+  with zero for labels absent from the test set. Evaluation reports expose
+  mean per-class recall by label in JSON and Markdown.
+
 **Fixed:**
 
 - `SlurmClusterService` derives each request's read timeout from its final
