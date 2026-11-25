@@ -6,11 +6,13 @@ Acquires an endpoint from the injected server manager for each batch call
 and releases it afterwards so multiple tasks can share the server pool.
 """
 import asyncio
+import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx2
 from openai import AsyncOpenAI
 
+from .. import config
 from ..base_llm_service import (
     BaseLLMService, _backoff_seconds, is_rate_limit_error, make_mechanism_error,
 )
@@ -25,9 +27,11 @@ logger = get_logger(__name__)
 class SlurmClusterService(BaseLLMService):
     """Service for models served on a SLURM cluster via a vLLM HTTP server.
 
-    Reads have no default timeout: queueing, prefill and decoding can exceed
-    a fixed deadline. Set ``api_params={"timeout": ...}`` at construction or
-    on a batch call to override this with an SDK request timeout.
+    Each request's read timeout allows queue/prefill time plus decode time
+    for its final ``max_tokens``, using the ``slurm_cluster`` config section.
+    A missing or None budget uses the service's configured maximum, then the
+    route default. Set ``api_params={"timeout": ...}`` at construction or on
+    a batch call to override the calculated SDK timeout (including None).
     """
 
     def __init__(self, model: LLMModel, **kwargs):
@@ -53,7 +57,7 @@ class SlurmClusterService(BaseLLMService):
         )
         self.model = model
         self.temperature = kwargs.get("temperature", 0.0)
-        self.max_tokens = kwargs.get("max_tokens", 4096)
+        self.max_tokens = kwargs.get("max_tokens", config.get("slurm_cluster.max_tokens"))
         # Extra request params merged verbatim into every API call (vLLM's
         # OpenAI-compatible endpoint accepts most OpenAI params) — parity
         # with the OpenAI family's api_params seam.
@@ -62,13 +66,25 @@ class SlurmClusterService(BaseLLMService):
 
         logger.info(f"Initialized cluster service for {model.model_id} (dynamic pool)")
 
+    def _request_timeout(self, max_tokens: Optional[int]) -> httpx2.Timeout:
+        settings = config.get("slurm_cluster")
+        if max_tokens is None:
+            max_tokens = self.max_tokens
+        if max_tokens is None:
+            max_tokens = settings["max_tokens"]
+        read_seconds = (
+            settings["queue_prefill_seconds"]
+            + settings["decode_seconds_per_token"] * max_tokens
+        )
+        return httpx2.Timeout(600.0, connect=60.0, read=read_seconds)
+
     def _make_async_client(self, server_url: str) -> AsyncOpenAI:
         return AsyncOpenAI(
             base_url=server_url,
             api_key="unused",
             http_client=httpx2.AsyncClient(
                 trust_env=False,
-                timeout=httpx2.Timeout(600.0, connect=60.0, read=None),
+                timeout=self._request_timeout(self.max_tokens),
             ),
         )
 
@@ -120,7 +136,7 @@ class SlurmClusterService(BaseLLMService):
         sem: asyncio.Semaphore,
         messages: List[Dict],
         temperature: float,
-        max_tokens: int,
+        max_tokens: Optional[int],
         is_test: bool,
         top_logprobs: Optional[int] = None,
         extra_params: Optional[Dict[str, Any]] = None,
@@ -137,10 +153,16 @@ class SlurmClusterService(BaseLLMService):
             params.update(self.api_params)
         if extra_params:
             params.update(extra_params)
+        # Derive from the final output budget, not the service/client default.
+        # Presence matters: an explicit timeout=None is an SDK override too.
+        if "timeout" not in params:
+            params["timeout"] = self._request_timeout(params.get("max_tokens"))
         if top_logprobs is not None:
             params.update({"logprobs": True, "top_logprobs": top_logprobs})
         async with sem:
             for attempt in range(self.max_retries + 1):
+                started = time.monotonic()
+                response = None
                 try:
                     response = await client.chat.completions.create(**params)
 
@@ -180,6 +202,16 @@ class SlurmClusterService(BaseLLMService):
                     self._check_fatal_error(e, self.model.model_id)
                     logger.error(f"vLLM API error: {err}")
                     return make_mechanism_error(err), None
+                finally:
+                    usage = getattr(response, "usage", None)
+                    logger.info(
+                        "vLLM request timing: model=%s max_tokens=%s "
+                        "output_tokens=%s elapsed_s=%.3f response_received=%s timeout=%s",
+                        self.model.model_id, params.get("max_tokens"),
+                        getattr(usage, "completion_tokens", None),
+                        time.monotonic() - started, response is not None,
+                        params["timeout"],
+                    )
         return make_mechanism_error("retries exhausted (unreachable)"), None
 
     # ------------------------------------------------------------------

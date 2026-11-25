@@ -7,10 +7,15 @@ semver: MAJOR = breaking seam change · MINOR = new capability · PATCH = fix.
 
 **Fixed:**
 
-- `SlurmClusterService` no longer times out reads during long vLLM decodes.
-  The default read timeout is disabled; connection, write and pool timeouts
-  remain bounded. Explicit `api_params["timeout"]` values still override
-  the default, with batch-call values taking precedence over service values.
+- `SlurmClusterService` derives each request's read timeout from its final
+  output budget: by default, 300 seconds for queue/prefill plus 0.1 seconds
+  per token (3,576.8 seconds for 32,768 tokens). Both allowances and the
+  existing 4,096-token route default live in the `slurm_cluster` config
+  section. Missing/None request budgets use the service's configured maximum,
+  then the route default. Connect stays at 60 seconds, write/pool at 600.
+  Explicit `api_params["timeout"]` values still win, including None, with
+  batch-call values taking precedence over service values. Request timing
+  logs expose elapsed time and output tokens for tuning the allowances.
 
 - Forward-port from v8.9.0 on the 8.x maintenance line. **Two rows** on `SLURM_CLUSTER`: `LLAVA_V1_5_7B_VLGUARD_CLEAN` and
   `LLAVA_V1_5_7B_VLGUARD_MIXED`, VLGuard's LLaVA-1.5-7B checkpoints as a consumer converts them to the llava-hf layout and

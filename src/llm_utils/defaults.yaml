@@ -14,6 +14,30 @@ routes:
   # reason string names the timeout).
   probe_timeout_s: 10.0
 
+slurm_cluster:
+  # Existing default output budget, now also the timeout fallback when both
+  # request and service max_tokens are None. A service's max_tokens overrides
+  # this route default. Tune to the deployed model's supported output budget
+  # and the consumer's intended response lengths, not its architectural context.
+  max_tokens: 4096
+  # Per-request read timeout = queue_prefill_seconds +
+  # decode_seconds_per_token * effective max_tokens (after api_params merges).
+  # Initial basis: reported decodes of about 10-20 tokens/second; 0.1 covers
+  # the slower rate. Together with 300 seconds this allows 3576.8 seconds for
+  # 32768 tokens, close to the reported working 3600-second timeout override.
+  decode_seconds_per_token: 0.1
+  # Initial queue/prefill allowance, not a measured percentile: rounded from
+  # the 323.2 seconds left in that 3600-second override at 10 tokens/second.
+  # Tuning family: slurm_cluster request latency. Stream: the service's
+  # "vLLM request timing" log (model, token budget, actual output tokens,
+  # elapsed seconds, response received, effective timeout). Fit an upper
+  # quantile of completed-request elapsed time against actual output tokens
+  # per deployment; use its nonnegative intercept for queue/prefill and its
+  # positive slope for seconds/token. Treat timeouts as censored observations,
+  # never fast completions; check coverage on held-out long requests and
+  # include representative prompt lengths and server load before tightening.
+  queue_prefill_seconds: 300.0
+
 spend_cap:
   # US dollars of paid API spend one process may make (the "run"); null = no
   # cap. Checked before every paid call against recorded spend plus estimates

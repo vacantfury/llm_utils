@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 
-from llm_utils import LLMModel, SlurmClusterService
+from llm_utils import LLMModel, SlurmClusterService, config
 from llm_utils.llm_services import slurm_cluster_service
 
 
@@ -19,11 +19,12 @@ from llm_utils.llm_services import slurm_cluster_service
 @pytest.mark.parametrize(
     "max_tokens,service_params,call_params,expected_read,expected_connect",
     [
-        (32768, {}, {}, None, 60.0),
-        (16, {}, {}, None, 60.0),
+        (32768, {}, {}, 3576.8, 60.0),
+        (16, {}, {}, 301.6, 60.0),
         (32768, {"timeout": 3600.0}, {}, 3600.0, 3600.0),
         (32768, {"timeout": 600.0}, {"timeout": 3600.0}, 3600.0, 3600.0),
         (32768, {"timeout": 600.0}, {"timeout": None}, None, None),
+        (32768, {}, {"timeout": httpx2.Timeout(7200.0, connect=60.0)}, 7200.0, 60.0),
     ],
 )
 def test_decode_timeout_and_explicit_overrides(
@@ -88,9 +89,72 @@ def test_decode_timeout_and_explicit_overrides(
 
     assert len(requests) == 1  # No timeout-induced SDK retry of a long decode.
     timeout = requests[0].extensions["timeout"]
-    assert timeout["read"] == expected_read
+    if expected_read is None:
+        assert timeout["read"] is None
+    else:
+        assert timeout["read"] == pytest.approx(expected_read)
     assert timeout["connect"] == expected_connect
     if not service_params and not call_params:
         assert timeout["write"] == timeout["pool"] == 600.0
     assert len(clients) == 1 and clients[0].is_closed
     assert released == [(service.model.model_id, endpoint)]
+
+
+@pytest.mark.parametrize(
+    "service_kwargs,call_kwargs,settings,expected_tokens,expected_read",
+    [
+        # Omitted call budget inherits the configured service maximum.
+        ({"max_tokens": 8192}, {}, {}, 8192, 1119.2),
+        # None in a request uses that same maximum to size its timeout.
+        ({"max_tokens": 8192}, {"max_tokens": None}, {}, None, 1119.2),
+        # With neither budget set, the packaged/project route maximum applies.
+        ({"max_tokens": None}, {}, {"max_tokens": 16384}, None, 1938.4),
+        ({}, {}, {"max_tokens": 8192}, 8192, 1119.2),
+        # api_params may replace the ordinary max_tokens argument.
+        ({"api_params": {"max_tokens": 32768}}, {"max_tokens": 16}, {}, 32768, 3576.8),
+        (
+            {"api_params": {"max_tokens": 16}},
+            {"api_params": {"max_tokens": 32768}}, {}, 32768, 3576.8,
+        ),
+        # Both latency allowances come from config, not hardcoded defaults.
+        (
+            {}, {"max_tokens": 16},
+            {"decode_seconds_per_token": 0.2, "queue_prefill_seconds": 120.0},
+            16, 123.2,
+        ),
+    ],
+)
+def test_timeout_uses_final_budget_and_route_config(
+    monkeypatch, service_kwargs, call_kwargs, settings, expected_tokens, expected_read,
+):
+    config.configure(slurm_cluster=settings)
+    calls = []
+
+    async def create(**params):
+        calls.append(params)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="decoded"))],
+            usage=None,
+        )
+
+    async def close():
+        pass
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)), close=close,
+    )
+    manager = SimpleNamespace(
+        acquire_endpoint=lambda model_id: "https://vllm.invalid/v1",
+        release_endpoint=lambda model_id, url: None,
+    )
+    service = SlurmClusterService(
+        LLMModel.LLAMA3_1_8B_CLUSTER, server_manager=manager, **service_kwargs,
+    )
+    monkeypatch.setattr(service, "_make_async_client", lambda url: client)
+    assert service.batch_chat([("row", [("Decode.", None)])], **call_kwargs) == [
+        ("row", "decoded"),
+    ]
+    assert len(calls) == 1
+    assert calls[0]["max_tokens"] == expected_tokens
+    assert calls[0]["timeout"].read == pytest.approx(expected_read)
+    assert calls[0]["timeout"].connect == 60.0
